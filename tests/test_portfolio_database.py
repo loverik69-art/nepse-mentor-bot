@@ -361,3 +361,86 @@ def test_transaction_saves_individual_fee_components(portfolio_db):
     assert fees[1] == 10.00
     assert fees[2] == 0.36
     assert fees[3] == 25.00
+
+
+@pytest.mark.parametrize("telegram_id", [0, -1, True, False, "1001", None])
+def test_record_transaction_rejects_invalid_telegram_id(
+    portfolio_db, telegram_id
+):
+    with pytest.raises(ValueError, match="Telegram ID"):
+        asyncio.run(
+            db.record_portfolio_transaction(
+                telegram_id, "NABIL", "buy", 10, 500
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "quantity, price",
+    [
+        (0, 500),
+        (-1, 500),
+        (10, 0),
+        (10, -500),
+        (float("inf"), 500),
+        (10, float("nan")),
+        (True, 500),
+        (10, "500"),
+    ],
+)
+def test_fee_calculator_rejects_invalid_values(quantity, price):
+    with pytest.raises(ValueError):
+        db.calculate_equity_transaction_fees(
+            quantity, price, "buy"
+        )
+
+
+@pytest.mark.parametrize("symbol", ["", "   ", None, 123, "NABIL-1"])
+def test_record_transaction_rejects_invalid_symbol(portfolio_db, symbol):
+    with pytest.raises(ValueError, match="symbol"):
+        asyncio.run(
+            db.record_portfolio_transaction(
+                1001, symbol, "buy", 10, 500
+            )
+        )
+
+
+@pytest.mark.parametrize("transaction_type", ["BUY", "hold", "", None])
+def test_record_transaction_rejects_invalid_type(portfolio_db, transaction_type):
+    with pytest.raises(ValueError, match="Transaction type"):
+        asyncio.run(
+            db.record_portfolio_transaction(
+                1001, "NABIL", transaction_type, 10, 500
+            )
+        )
+
+
+@pytest.mark.parametrize("quantity, price", [
+    (0, 500),
+    (-1, 500),
+    (10, 0),
+    (10, -500),
+    (float("inf"), 500),
+    (10, float("nan")),
+    (True, 500),
+    (10, "500"),
+])
+def test_record_transaction_rejects_invalid_quantity_or_price(
+    portfolio_db, quantity, price
+):
+    with pytest.raises(ValueError):
+        asyncio.run(
+            db.record_portfolio_transaction(
+                1001, "NABIL", "buy", quantity, price
+            )
+        )
+
+
+@pytest.mark.parametrize("fees", [-1, float("inf"), float("nan"), True, "10"])
+def test_record_transaction_rejects_invalid_fees(portfolio_db, fees):
+    with pytest.raises(ValueError, match="Fees"):
+        asyncio.run(
+            db.record_portfolio_transaction(
+                1001, "NABIL", "buy", 10, 500, fees
+            )
+        )

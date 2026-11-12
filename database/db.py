@@ -565,6 +565,15 @@ def calculate_equity_transaction_fees(
     if transaction_type not in ("buy", "sell"):
         raise ValueError("Transaction type must be buy or sell.")
 
+    for name, value in (("quantity", quantity), ("price", price)):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be a positive finite number.")
+
     trade_value = Decimal(str(quantity)) * Decimal(str(price))
 
     if trade_value <= 50_000:
@@ -609,6 +618,13 @@ async def record_portfolio_transaction(
     fees: float | None = None,
 ) -> dict:
     """Record a buy or sell and update the holding atomically."""
+    if (
+        isinstance(telegram_id, bool)
+        or not isinstance(telegram_id, int)
+        or telegram_id <= 0
+    ):
+        raise ValueError("Telegram ID must be a positive integer.")
+
     if not isinstance(symbol, str) or not symbol.strip() or not symbol.strip().isalnum():
         raise ValueError("Invalid stock symbol.")
 
