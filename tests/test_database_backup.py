@@ -137,3 +137,48 @@ def test_prune_database_backups_rejects_zero_retention(tmp_path):
 
     with pytest.raises(ValueError):
         prune_database_backups(tmp_path, keep=0)
+
+
+def test_restore_preserves_multiple_tables_and_records(tmp_path):
+    target = tmp_path / "nepse.db"
+    backup_dir = tmp_path / "backups"
+    safety_dir = tmp_path / "safety"
+
+    with sqlite3.connect(target) as connection:
+        connection.execute(
+            "CREATE TABLE portfolio (symbol TEXT, quantity REAL)"
+        )
+        connection.execute(
+            "CREATE TABLE transactions (symbol TEXT, action TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO portfolio VALUES (?, ?)",
+            [("NABIL", 10), ("NICA", 5)],
+        )
+        connection.executemany(
+            "INSERT INTO transactions VALUES (?, ?)",
+            [("NABIL", "buy"), ("NICA", "sell")],
+        )
+
+    backup = create_database_backup(target, backup_dir)
+
+    with sqlite3.connect(target) as connection:
+        connection.execute("DELETE FROM portfolio")
+        connection.execute("DELETE FROM transactions")
+
+    restore_database_backup(backup, target, safety_dir)
+
+    with sqlite3.connect(target) as connection:
+        integrity = connection.execute(
+            "PRAGMA integrity_check"
+        ).fetchone()[0]
+        holdings = connection.execute(
+            "SELECT symbol, quantity FROM portfolio ORDER BY symbol"
+        ).fetchall()
+        transactions = connection.execute(
+            "SELECT symbol, action FROM transactions ORDER BY symbol"
+        ).fetchall()
+
+    assert integrity == "ok"
+    assert holdings == [("NABIL", 10.0), ("NICA", 5.0)]
+    assert transactions == [("NABIL", "buy"), ("NICA", "sell")]
