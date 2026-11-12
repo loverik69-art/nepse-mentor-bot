@@ -139,8 +139,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/compare SYMBOL1 SYMBOL2 — compare stocks\n\n"
         "💼 PORTFOLIO\n"
         "/addstock — add a portfolio holding\n"
-        "/buy SYMBOL QUANTITY PRICE [FEES] — record a purchase\n"
-        "/sell SYMBOL QUANTITY PRICE [FEES] — record a sale\n"
+        "/buy SYMBOL QUANTITY PRICE — record a purchase\n"
+        "/sell SYMBOL QUANTITY PRICE — record a sale\n"
         "/transactions [LIMIT] — view transaction history\n"
         "/portfolio — view your portfolio\n"
         "/removestock SYMBOL — remove a holding\n"
@@ -1563,10 +1563,10 @@ async def _portfolio_transaction_command(
     context: ContextTypes.DEFAULT_TYPE,
     transaction_type: str,
 ) -> None:
-    if len(context.args) not in (3, 4):
+    if len(context.args) != 3:
         await update.message.reply_text(
-            f"Usage: /{transaction_type} SYMBOL QUANTITY PRICE [FEES]\n"
-            f"Example: /{transaction_type} NABIL 10 500 100"
+            f"Usage: /{transaction_type} SYMBOL QUANTITY PRICE\n"
+            f"Example: /{transaction_type} NABIL 10 500"
         )
         return
 
@@ -1579,7 +1579,6 @@ async def _portfolio_transaction_command(
     try:
         quantity = float(context.args[1])
         price = float(context.args[2])
-        fees = float(context.args[3]) if len(context.args) == 4 else 0.0
 
         result = await record_portfolio_transaction(
             telegram_id=update.effective_user.id,
@@ -1587,7 +1586,6 @@ async def _portfolio_transaction_command(
             transaction_type=transaction_type,
             quantity=quantity,
             price=price,
-            fees=fees,
         )
 
     except ValueError as exc:
@@ -1600,16 +1598,31 @@ async def _portfolio_transaction_command(
         )
         return
 
+    fees = result["fee_breakdown"]
+    trade_value = fees["trade_value"]
+
     message = (
         f"✅ {transaction_type.upper()} transaction recorded.\n\n"
         f"Stock: {result['symbol']}\n"
         f"Quantity: {quantity:g}\n"
         f"Price: NPR {price:,.2f}\n"
-        f"Fees: NPR {fees:,.2f}\n"
-        f"Gross amount: NPR {quantity * price:,.2f}"
+        f"Trade value: NPR {trade_value:,.2f}\n\n"
+        f"Broker commission: NPR {fees['broker_commission']:,.2f}\n"
+        f"SEBON fee: NPR {fees['sebon_fee']:,.2f}\n"
+        f"DP charge: NPR {fees['dp_charge']:,.2f}\n"
+        f"Total charges: NPR {fees['total_fees']:,.2f}"
     )
 
-    if transaction_type == "sell":
+    if transaction_type == "buy":
+        message += (
+            f"\nTotal buy cost: "
+            f"NPR {trade_value + fees['total_fees']:,.2f}"
+        )
+    else:
+        message += (
+            f"\nNet sale proceeds: "
+            f"NPR {trade_value - fees['total_fees']:,.2f}"
+        )
         pnl = result["realized_profit_loss"]
         message += f"\nRealized P&L: NPR {pnl:+,.2f}"
 

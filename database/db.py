@@ -1,4 +1,5 @@
 import math
+from decimal import Decimal, ROUND_HALF_UP
 import aiosqlite
 from config import settings
 
@@ -536,13 +537,59 @@ async def get_all_active_stock_price_alerts() -> list[dict]:
             return [dict(row) for row in rows]
 
 
+
+
+def calculate_equity_transaction_fees(
+    quantity: float,
+    price: float,
+    transaction_type: str,
+) -> dict:
+    """Estimate NEPSE equity transaction charges."""
+    if transaction_type not in ("buy", "sell"):
+        raise ValueError("Transaction type must be buy or sell.")
+
+    trade_value = Decimal(str(quantity)) * Decimal(str(price))
+
+    if trade_value <= 50_000:
+        rate = Decimal("0.0036")
+    elif trade_value <= 500_000:
+        rate = Decimal("0.0033")
+    elif trade_value <= 2_000_000:
+        rate = Decimal("0.0031")
+    elif trade_value <= 10_000_000:
+        rate = Decimal("0.0027")
+    else:
+        rate = Decimal("0.0024")
+
+    round_money = lambda amount: amount.quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+
+    commission = max(Decimal("10"), trade_value * rate)
+    sebon_fee = trade_value * Decimal("0.00015")
+    dp_charge = Decimal("25") if transaction_type == "sell" else Decimal("0")
+
+    commission = round_money(commission)
+    sebon_fee = round_money(sebon_fee)
+    dp_charge = round_money(dp_charge)
+
+    total_fees = commission + sebon_fee + dp_charge
+
+    return {
+        "trade_value": float(round_money(trade_value)),
+        "broker_commission": float(commission),
+        "sebon_fee": float(sebon_fee),
+        "dp_charge": float(dp_charge),
+        "total_fees": float(total_fees),
+    }
+
 async def record_portfolio_transaction(
     telegram_id: int,
     symbol: str,
     transaction_type: str,
     quantity: float,
     price: float,
-    fees: float = 0,
+    fees: float | None = None,
 ) -> dict:
     """Record a buy or sell and update the holding atomically."""
     if not isinstance(symbol, str) or not symbol.strip() or not symbol.strip().isalnum():
@@ -562,7 +609,7 @@ async def record_portfolio_transaction(
         ):
             raise ValueError(f"{name} must be a positive finite number.")
 
-    if (
+    if fees is not None and (
         isinstance(fees, bool)
         or not isinstance(fees, (int, float))
         or not math.isfinite(fees)
@@ -572,7 +619,17 @@ async def record_portfolio_transaction(
 
     quantity = float(quantity)
     price = float(price)
-    fees = float(fees)
+
+    fee_breakdown = calculate_equity_transaction_fees(
+        quantity, price, transaction_type
+    ) if fees is None else {
+        "trade_value": quantity * price,
+        "broker_commission": float(fees),
+        "sebon_fee": 0.0,
+        "dp_charge": 0.0,
+        "total_fees": float(fees),
+    }
+    fees = fee_breakdown["total_fees"]
 
     async with aiosqlite.connect(settings.database_path) as db:
         await db.execute("BEGIN IMMEDIATE")
@@ -676,6 +733,7 @@ async def record_portfolio_transaction(
                 "quantity": quantity,
                 "price": price,
                 "fees": fees,
+                "fee_breakdown": fee_breakdown,
                 "realized_profit_loss": realized_profit_loss,
             }
 

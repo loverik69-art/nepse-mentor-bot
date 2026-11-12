@@ -282,3 +282,54 @@ def test_transaction_history_is_isolated_and_newest_first(portfolio_db):
     assert len(limited) == 1
     assert len(other_user) == 1
     assert other_user[0]["symbol"] == "NICA"
+
+
+def test_automatic_buy_fee_calculation():
+    fees = db.calculate_equity_transaction_fees(10, 500, "buy")
+
+    assert fees["trade_value"] == 5000
+    assert fees["broker_commission"] == 18
+    assert fees["sebon_fee"] == 0.75
+    assert fees["dp_charge"] == 0
+    assert fees["total_fees"] == 18.75
+
+
+def test_automatic_sell_fee_calculation():
+    fees = db.calculate_equity_transaction_fees(4, 600, "sell")
+
+    assert fees["trade_value"] == 2400
+    assert fees["broker_commission"] == 10
+    assert fees["sebon_fee"] == 0.36
+    assert fees["dp_charge"] == 25
+    assert fees["total_fees"] == 35.36
+
+
+def test_automatic_fees_are_included_in_buy_cost(portfolio_db):
+    async def run_test():
+        result = await db.record_portfolio_transaction(
+            1001, "NABIL", "buy", 10, 500
+        )
+        holdings = await db.get_portfolio(1001)
+        return result, holdings
+
+    result, holdings = asyncio.run(run_test())
+
+    assert result["fees"] == 18.75
+    assert result["fee_breakdown"]["total_fees"] == 18.75
+    assert holdings[0]["average_buy_price"] == 501.875
+
+
+def test_automatic_fees_reduce_sell_profit(portfolio_db):
+    async def run_test():
+        await db.record_portfolio_transaction(
+            1001, "NABIL", "buy", 10, 500, 100
+        )
+        result = await db.record_portfolio_transaction(
+            1001, "NABIL", "sell", 4, 600
+        )
+        return result
+
+    result = asyncio.run(run_test())
+
+    assert result["fees"] == 35.36
+    assert result["realized_profit_loss"] == pytest.approx(324.64)
