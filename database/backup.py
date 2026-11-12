@@ -112,3 +112,30 @@ def restore_database_backup(
             raise
 
     return safety_backup
+
+
+def prune_database_backups(
+    backup_dir: str | Path,
+    keep: int = 7,
+) -> list[Path]:
+    """Keep only the newest requested automatic database backups."""
+    if keep < 1:
+        raise ValueError("At least one backup must be retained")
+
+    backup_dir = Path(backup_dir)
+
+    if not backup_dir.exists():
+        return []
+
+    backups = sorted(
+        backup_dir.glob("nepse-*.db"),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+
+    removed = backups[keep:]
+
+    for backup in removed:
+        backup.unlink()
+
+    return removed

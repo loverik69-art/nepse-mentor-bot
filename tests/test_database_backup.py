@@ -110,3 +110,30 @@ def test_restore_rejects_invalid_backup_without_changing_target(
 
     assert value == 123
     assert not safety_dir.exists()
+
+
+def test_prune_database_backups_keeps_newest(tmp_path):
+    from database.backup import prune_database_backups
+
+    backup_dir = tmp_path / "automatic"
+    backup_dir.mkdir()
+
+    for day in range(1, 5):
+        (backup_dir / f"nepse-202611{day:02d}.db").touch()
+
+    removed = prune_database_backups(backup_dir, keep=2)
+
+    remaining = sorted(path.name for path in backup_dir.glob("*.db"))
+
+    assert remaining == [
+        "nepse-20261103.db",
+        "nepse-20261104.db",
+    ]
+    assert len(removed) == 2
+
+
+def test_prune_database_backups_rejects_zero_retention(tmp_path):
+    from database.backup import prune_database_backups
+
+    with pytest.raises(ValueError):
+        prune_database_backups(tmp_path, keep=0)

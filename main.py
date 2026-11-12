@@ -1,3 +1,4 @@
+import asyncio
 
 import logging
 from logging.handlers import RotatingFileHandler
@@ -13,6 +14,7 @@ from telegram.ext import (
 
 from config import settings
 from database.db import init_db
+from database.backup import create_database_backup, prune_database_backups
 from services.price_alerts import check_price_alerts_job
 from bot.handlers import (
     start,
@@ -71,6 +73,31 @@ def configure_logging():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[handler, logging.StreamHandler()],
     )
+
+
+async def automatic_database_backup(context):
+    logger = logging.getLogger(__name__)
+    backup_dir = Path("backups/automatic")
+
+    try:
+        backup_path = await asyncio.to_thread(
+            create_database_backup,
+            settings.database_path,
+            backup_dir,
+        )
+        removed = await asyncio.to_thread(
+            prune_database_backups,
+            backup_dir,
+            7,
+        )
+        logger.info(
+            "Automatic database backup created: %s; "
+            "old backups removed: %d",
+            backup_path,
+            len(removed),
+        )
+    except Exception:
+        logger.exception("Automatic database backup failed")
 
 
 async def post_init(application):
@@ -159,6 +186,12 @@ def build_application():
         interval=300,
         first=30,
         name="price-alert-checker",
+    )
+    app.job_queue.run_repeating(
+        automatic_database_backup,
+        interval=24 * 60 * 60,
+        first=60,
+        name="automatic-database-backup",
     )
     return app
 
