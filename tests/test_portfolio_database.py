@@ -333,3 +333,31 @@ def test_automatic_fees_reduce_sell_profit(portfolio_db):
 
     assert result["fees"] == 35.36
     assert result["realized_profit_loss"] == pytest.approx(324.64)
+
+
+def test_transaction_saves_individual_fee_components(portfolio_db):
+    async def run_test():
+        await db.record_portfolio_transaction(
+            1001, "NABIL", "buy", 10, 500, 100
+        )
+        await db.record_portfolio_transaction(
+            1001, "NABIL", "sell", 4, 600
+        )
+
+        async with aiosqlite.connect(portfolio_db) as connection:
+            cursor = await connection.execute(
+                """
+                SELECT fees, broker_commission, sebon_fee, dp_charge
+                FROM portfolio_transactions
+                WHERE telegram_id = ? AND transaction_type = 'sell'
+                """,
+                (1001,),
+            )
+            return await cursor.fetchone()
+
+    fees = asyncio.run(run_test())
+
+    assert fees[0] == 35.36
+    assert fees[1] == 10.00
+    assert fees[2] == 0.36
+    assert fees[3] == 25.00
