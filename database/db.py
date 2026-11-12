@@ -1,3 +1,4 @@
+import math
 import aiosqlite
 from config import settings
 
@@ -317,6 +318,25 @@ async def save_portfolio_daily_snapshot(
     holdings_count: int,
 ) -> None:
     """Save or update one user's daily portfolio snapshot."""
+    for name, value in (
+        ("total_investment", total_investment),
+        ("current_value", current_value),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(f"{name} must be a finite non-negative number")
+
+    if (
+        isinstance(holdings_count, bool)
+        or not isinstance(holdings_count, int)
+        or holdings_count < 0
+    ):
+        raise ValueError("holdings_count must be a non-negative integer")
+
     async with aiosqlite.connect(settings.database_path) as db:
         await db.execute(
             """

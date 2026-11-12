@@ -378,3 +378,48 @@ def test_get_portfolio_daily_snapshots_rejects_invalid_limit():
 
     with pytest.raises(ValueError, match="limit must be at least 1"):
         asyncio.run(run_test())
+
+
+@pytest.mark.parametrize(
+    "investment,current",
+    [
+        (-1.0, 100.0),
+        (100.0, -1.0),
+        (float("nan"), 100.0),
+        (100.0, float("nan")),
+        (float("inf"), 100.0),
+        (100.0, float("inf")),
+    ],
+)
+def test_save_portfolio_daily_snapshot_rejects_invalid_values(
+    investment,
+    current,
+):
+    async def run_test():
+        await db.save_portfolio_daily_snapshot(
+            12345,
+            "2026-11-12",
+            investment,
+            current,
+            2,
+        )
+
+    with pytest.raises(ValueError):
+        asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("holdings_count", [-1, 1.5, True])
+def test_save_portfolio_daily_snapshot_rejects_invalid_holdings_count(
+    holdings_count,
+):
+    async def run_test():
+        await db.save_portfolio_daily_snapshot(
+            12345,
+            "2026-11-12",
+            100000.0,
+            105000.0,
+            holdings_count,
+        )
+
+    with pytest.raises(ValueError, match="holdings_count"):
+        asyncio.run(run_test())
