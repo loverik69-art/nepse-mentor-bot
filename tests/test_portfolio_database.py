@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+import aiosqlite
 
 import pytest
 
@@ -189,3 +190,95 @@ def test_add_portfolio_holding_rejects_invalid_average_buy_price(
                 1001, "NABIL", 10, average_buy_price
             )
         )
+
+
+def test_buy_transaction_creates_holding_with_fees(portfolio_db):
+    async def run_test():
+        await db.record_portfolio_transaction(
+            telegram_id=1001,
+            symbol="NABIL",
+            transaction_type="buy",
+            quantity=10,
+            price=500,
+            fees=100,
+        )
+        return await db.get_portfolio(1001)
+
+    holdings = asyncio.run(run_test())
+
+    assert len(holdings) == 1
+    assert holdings[0]["symbol"] == "NABIL"
+    assert holdings[0]["quantity"] == 10
+    assert holdings[0]["average_buy_price"] == 510
+
+
+def test_additional_buy_uses_weighted_average(portfolio_db):
+    async def run_test():
+        await db.record_portfolio_transaction(1001, "NABIL", "buy", 10, 500, 100)
+        await db.record_portfolio_transaction(1001, "NABIL", "buy", 10, 600, 0)
+        return await db.get_portfolio(1001)
+
+    holdings = asyncio.run(run_test())
+
+    assert len(holdings) == 1
+    assert holdings[0]["quantity"] == 20
+    assert holdings[0]["average_buy_price"] == 555
+
+
+def test_sell_calculates_realized_profit_loss(portfolio_db):
+    async def run_test():
+        await db.record_portfolio_transaction(1001, "NABIL", "buy", 10, 500, 100)
+        result = await db.record_portfolio_transaction(1001, "NABIL", "sell", 4, 600, 40)
+        holdings = await db.get_portfolio(1001)
+        return result, holdings
+
+    result, holdings = asyncio.run(run_test())
+
+    assert result["realized_profit_loss"] == 320
+    assert len(holdings) == 1
+    assert holdings[0]["quantity"] == 6
+    assert holdings[0]["average_buy_price"] == 510
+
+
+def test_sell_rejects_quantity_above_holding(portfolio_db):
+    async def run_test():
+        await db.record_portfolio_transaction(1001, "NABIL", "buy", 5, 500)
+
+        with pytest.raises(ValueError, match="cannot sell more"):
+            await db.record_portfolio_transaction(1001, "NABIL", "sell", 6, 600)
+
+        holdings = await db.get_portfolio(1001)
+        async with aiosqlite.connect(portfolio_db) as connection:
+            cursor = await connection.execute(
+                "SELECT COUNT(*) FROM portfolio_transactions"
+            )
+            transaction_count = (await cursor.fetchone())[0]
+
+        return holdings, transaction_count
+
+    holdings, transaction_count = asyncio.run(run_test())
+
+    assert holdings[0]["quantity"] == 5
+    assert transaction_count == 1
+
+
+def test_transaction_history_is_isolated_and_newest_first(portfolio_db):
+    async def run_test():
+        await db.record_portfolio_transaction(1001, "NABIL", "buy", 5, 500)
+        await db.record_portfolio_transaction(1001, "NABIL", "buy", 2, 550)
+        await db.record_portfolio_transaction(2002, "NICA", "buy", 3, 700)
+
+        history = await db.get_portfolio_transactions(1001)
+        limited = await db.get_portfolio_transactions(1001, limit=1)
+        other_user = await db.get_portfolio_transactions(2002)
+
+        return history, limited, other_user
+
+    history, limited, other_user = asyncio.run(run_test())
+
+    assert len(history) == 2
+    assert history[0]["quantity"] == 2
+    assert history[1]["quantity"] == 5
+    assert len(limited) == 1
+    assert len(other_user) == 1
+    assert other_user[0]["symbol"] == "NICA"

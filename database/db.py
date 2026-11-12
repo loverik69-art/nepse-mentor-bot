@@ -59,6 +59,21 @@ CREATE TABLE IF NOT EXISTS portfolio (
     UNIQUE(telegram_id, symbol)
 );
 
+CREATE TABLE IF NOT EXISTS portfolio_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('buy', 'sell')),
+    quantity REAL NOT NULL CHECK(quantity > 0),
+    price REAL NOT NULL CHECK(price > 0),
+    fees REAL NOT NULL DEFAULT 0 CHECK(fees >= 0),
+    realized_profit_loss REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_transactions_user_id
+ON portfolio_transactions(telegram_id, id);
+
 CREATE INDEX IF NOT EXISTS idx_alerts_user_id
 ON stock_price_alerts(telegram_id, id);
 
@@ -516,6 +531,180 @@ async def get_all_active_stock_price_alerts() -> list[dict]:
             WHERE status = 'active'
             ORDER BY id ASC
             """
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def record_portfolio_transaction(
+    telegram_id: int,
+    symbol: str,
+    transaction_type: str,
+    quantity: float,
+    price: float,
+    fees: float = 0,
+) -> dict:
+    """Record a buy or sell and update the holding atomically."""
+    if not isinstance(symbol, str) or not symbol.strip() or not symbol.strip().isalnum():
+        raise ValueError("Invalid stock symbol.")
+
+    symbol = symbol.strip().upper()
+
+    if transaction_type not in ("buy", "sell"):
+        raise ValueError("Transaction type must be buy or sell.")
+
+    for name, value in (("quantity", quantity), ("price", price)):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be a positive finite number.")
+
+    if (
+        isinstance(fees, bool)
+        or not isinstance(fees, (int, float))
+        or not math.isfinite(fees)
+        or fees < 0
+    ):
+        raise ValueError("Fees must be a non-negative finite number.")
+
+    quantity = float(quantity)
+    price = float(price)
+    fees = float(fees)
+
+    async with aiosqlite.connect(settings.database_path) as db:
+        await db.execute("BEGIN IMMEDIATE")
+
+        try:
+            async with db.execute(
+                """
+                SELECT quantity, average_buy_price
+                FROM portfolio
+                WHERE telegram_id = ? AND symbol = ?
+                """,
+                (telegram_id, symbol),
+            ) as cursor:
+                holding = await cursor.fetchone()
+
+            realized_profit_loss = None
+
+            if transaction_type == "buy":
+                old_quantity = holding[0] if holding else 0.0
+                old_average = holding[1] if holding else 0.0
+
+                new_quantity = old_quantity + quantity
+                new_average = (
+                    old_quantity * old_average + quantity * price + fees
+                ) / new_quantity
+
+                await db.execute(
+                    """
+                    INSERT INTO portfolio (
+                        telegram_id, symbol, quantity, average_buy_price
+                    )
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(telegram_id, symbol)
+                    DO UPDATE SET
+                        quantity = excluded.quantity,
+                        average_buy_price = excluded.average_buy_price,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (telegram_id, symbol, new_quantity, new_average),
+                )
+
+            else:
+                if holding is None:
+                    raise ValueError("You do not own this stock.")
+
+                old_quantity, average_price = holding
+
+                if quantity > old_quantity and not math.isclose(
+                    quantity, old_quantity, rel_tol=1e-12, abs_tol=1e-12
+                ):
+                    raise ValueError("You cannot sell more shares than you own.")
+
+                remaining = max(0.0, old_quantity - quantity)
+
+                realized_profit_loss = (
+                    quantity * price - fees - quantity * average_price
+                )
+
+                if math.isclose(remaining, 0.0, abs_tol=1e-12):
+                    await db.execute(
+                        """
+                        DELETE FROM portfolio
+                        WHERE telegram_id = ? AND symbol = ?
+                        """,
+                        (telegram_id, symbol),
+                    )
+                else:
+                    await db.execute(
+                        """
+                        UPDATE portfolio
+                        SET quantity = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE telegram_id = ? AND symbol = ?
+                        """,
+                        (remaining, telegram_id, symbol),
+                    )
+
+            await db.execute(
+                """
+                INSERT INTO portfolio_transactions (
+                    telegram_id, symbol, transaction_type,
+                    quantity, price, fees, realized_profit_loss
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    telegram_id,
+                    symbol,
+                    transaction_type,
+                    quantity,
+                    price,
+                    fees,
+                    realized_profit_loss,
+                ),
+            )
+
+            await db.commit()
+
+            return {
+                "symbol": symbol,
+                "transaction_type": transaction_type,
+                "quantity": quantity,
+                "price": price,
+                "fees": fees,
+                "realized_profit_loss": realized_profit_loss,
+            }
+
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def get_portfolio_transactions(
+    telegram_id: int,
+    limit: int = 20,
+) -> list[dict]:
+    """Retrieve the latest transactions belonging to one user."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("Limit must be a positive integer.")
+
+    async with aiosqlite.connect(settings.database_path) as db:
+        db.row_factory = aiosqlite.Row
+
+        async with db.execute(
+            """
+            SELECT id, symbol, transaction_type, quantity, price,
+                   fees, realized_profit_loss, created_at
+            FROM portfolio_transactions
+            WHERE telegram_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (telegram_id, limit),
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]

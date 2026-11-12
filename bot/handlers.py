@@ -17,6 +17,8 @@ from database.db import (
     remove_portfolio_holding,
     save_portfolio_daily_snapshot,
     get_portfolio_daily_snapshots,
+    record_portfolio_transaction,
+    get_portfolio_transactions,
     add_stock_price_alert,
     get_stock_price_alerts,
     remove_stock_price_alert,
@@ -137,6 +139,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/compare SYMBOL1 SYMBOL2 — compare stocks\n\n"
         "💼 PORTFOLIO\n"
         "/addstock — add a portfolio holding\n"
+        "/buy SYMBOL QUANTITY PRICE [FEES] — record a purchase\n"
+        "/sell SYMBOL QUANTITY PRICE [FEES] — record a sale\n"
+        "/transactions [LIMIT] — view transaction history\n"
         "/portfolio — view your portfolio\n"
         "/removestock SYMBOL — remove a holding\n"
         "/allocation — view portfolio allocation\n"
@@ -1551,3 +1556,154 @@ async def removealert_command(
         await update.message.reply_text(
             "Unable to remove the alert right now."
         )
+
+
+async def _portfolio_transaction_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    transaction_type: str,
+) -> None:
+    if len(context.args) not in (3, 4):
+        await update.message.reply_text(
+            f"Usage: /{transaction_type} SYMBOL QUANTITY PRICE [FEES]\n"
+            f"Example: /{transaction_type} NABIL 10 500 100"
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text("Invalid stock symbol.")
+        return
+
+    try:
+        quantity = float(context.args[1])
+        price = float(context.args[2])
+        fees = float(context.args[3]) if len(context.args) == 4 else 0.0
+
+        result = await record_portfolio_transaction(
+            telegram_id=update.effective_user.id,
+            symbol=symbol,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            price=price,
+            fees=fees,
+        )
+
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
+        return
+    except Exception:
+        logging.exception("Failed to record portfolio transaction")
+        await update.message.reply_text(
+            "Unable to record this transaction right now."
+        )
+        return
+
+    message = (
+        f"✅ {transaction_type.upper()} transaction recorded.\n\n"
+        f"Stock: {result['symbol']}\n"
+        f"Quantity: {quantity:g}\n"
+        f"Price: NPR {price:,.2f}\n"
+        f"Fees: NPR {fees:,.2f}\n"
+        f"Gross amount: NPR {quantity * price:,.2f}"
+    )
+
+    if transaction_type == "sell":
+        pnl = result["realized_profit_loss"]
+        message += f"\nRealized P&L: NPR {pnl:+,.2f}"
+
+    await update.message.reply_text(message)
+
+
+async def buy_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    await _portfolio_transaction_command(update, context, "buy")
+
+
+async def sell_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    await _portfolio_transaction_command(update, context, "sell")
+
+
+async def transactions_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if len(context.args) > 1:
+        await update.message.reply_text(
+            "Usage: /transactions [LIMIT]\nExample: /transactions 10"
+        )
+        return
+
+    try:
+        limit = int(context.args[0]) if context.args else 10
+
+        if not 1 <= limit <= 50:
+            raise ValueError
+
+        transactions = await get_portfolio_transactions(
+            update.effective_user.id,
+            limit=limit,
+        )
+
+    except ValueError:
+        await update.message.reply_text("Limit must be between 1 and 50.")
+        return
+    except Exception:
+        logging.exception("Failed to retrieve transaction history")
+        await update.message.reply_text(
+            "Unable to retrieve transactions right now."
+        )
+        return
+
+    if not transactions:
+        await update.message.reply_text(
+            "No transactions found.\n\n"
+            "Record your first purchase using:\n"
+            "/buy NABIL 10 500"
+        )
+        return
+
+    entries = []
+
+    for item in transactions:
+        action = item["transaction_type"].upper()
+        entry = (
+            f"{action} {item['symbol']}\n"
+            f"Quantity: {item['quantity']:g}\n"
+            f"Price: NPR {item['price']:,.2f}\n"
+            f"Fees: NPR {item['fees']:,.2f}"
+        )
+
+        if item['realized_profit_loss'] is not None:
+            entry += (
+                f"\nRealized P&L: "
+                f"NPR {item['realized_profit_loss']:+,.2f}"
+            )
+
+        entry += f"\nDate: {item['created_at']}"
+        entries.append(entry)
+
+    heading = "📒 YOUR TRANSACTION HISTORY"
+    messages = []
+    current_message = heading
+
+    for entry in entries:
+        addition = "\n\n" + entry
+
+        if len(current_message) + len(addition) > 3500:
+            messages.append(current_message)
+            current_message = heading + addition
+        else:
+            current_message += addition
+
+    if current_message:
+        messages.append(current_message)
+
+    for message in messages:
+        await update.message.reply_text(message)
