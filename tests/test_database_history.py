@@ -259,3 +259,122 @@ def test_get_indicator_prices_rejects_invalid_limit():
     with pytest.raises(ValueError, match="limit must be at least 1"):
         asyncio.run(run_test())
 
+
+
+def test_init_db_creates_stock_price_alert_indexes(tmp_path, monkeypatch):
+    database_path = tmp_path / "test_nepse.db"
+
+    monkeypatch.setattr(
+        db,
+        "settings",
+        SimpleNamespace(database_path=str(database_path)),
+    )
+
+    async def inspect_indexes():
+        await db.init_db()
+
+        async with aiosqlite.connect(database_path) as connection:
+            async with connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'index'
+                """
+            ) as cursor:
+                return {row[0] for row in await cursor.fetchall()}
+
+    indexes = asyncio.run(inspect_indexes())
+
+    assert "idx_alerts_user_id" in indexes
+    assert "idx_alerts_active_id" in indexes
+
+
+def test_save_portfolio_daily_snapshot_inserts_and_updates(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "test_nepse.db"
+
+    monkeypatch.setattr(
+        db,
+        "settings",
+        SimpleNamespace(database_path=str(database_path)),
+    )
+
+    async def run_test():
+        await db.init_db()
+
+        await db.save_portfolio_daily_snapshot(
+            12345, "2026-11-10", 100000.0, 105000.0, 3
+        )
+        await db.save_portfolio_daily_snapshot(
+            12345, "2026-11-10", 110000.0, 115000.0, 4
+        )
+
+        async with aiosqlite.connect(database_path) as connection:
+            async with connection.execute(
+                """
+                SELECT total_investment, current_value, holdings_count
+                FROM portfolio_daily_snapshots
+                WHERE telegram_id = ? AND snapshot_date = ?
+                """,
+                (12345, "2026-11-10"),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+            async with connection.execute(
+                "SELECT COUNT(*) FROM portfolio_daily_snapshots"
+            ) as cursor:
+                count = (await cursor.fetchone())[0]
+
+        return row, count
+
+    row, count = asyncio.run(run_test())
+
+    assert row == (110000.0, 115000.0, 4)
+    assert count == 1
+
+
+def test_get_portfolio_daily_snapshots_returns_newest_first_and_respects_limit(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "test_nepse.db"
+
+    monkeypatch.setattr(
+        db,
+        "settings",
+        SimpleNamespace(database_path=str(database_path)),
+    )
+
+    async def run_test():
+        await db.init_db()
+
+        for date, investment, current, holdings in [
+            ("2026-11-08", 90000.0, 95000.0, 2),
+            ("2026-11-09", 100000.0, 105000.0, 3),
+            ("2026-11-10", 110000.0, 115000.0, 4),
+        ]:
+            await db.save_portfolio_daily_snapshot(
+                12345, date, investment, current, holdings
+            )
+
+        return await db.get_portfolio_daily_snapshots(
+            12345, limit=2
+        )
+
+    snapshots = asyncio.run(run_test())
+
+    assert len(snapshots) == 2
+    assert snapshots[0]["snapshot_date"] == "2026-11-10"
+    assert snapshots[1]["snapshot_date"] == "2026-11-09"
+
+
+def test_get_portfolio_daily_snapshots_rejects_invalid_limit():
+    async def run_test():
+        return await db.get_portfolio_daily_snapshots(
+            12345, limit=0
+        )
+
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        asyncio.run(run_test())

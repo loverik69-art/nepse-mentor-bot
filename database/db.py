@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS portfolio (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(telegram_id, symbol)
 );
+
+CREATE INDEX IF NOT EXISTS idx_alerts_user_id
+ON stock_price_alerts(telegram_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_active_id
+ON stock_price_alerts(id)
+WHERE status = 'active';
 """
 
 async def init_db() -> None:
