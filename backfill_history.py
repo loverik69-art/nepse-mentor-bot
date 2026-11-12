@@ -32,7 +32,7 @@ async def main():
 
     months = sorted(months, reverse=True)
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         cursor = await db.execute(
             """
             SELECT DISTINCT substr(source_updated_at, 1, 7)

@@ -84,7 +84,7 @@ WHERE status = 'active';
 """
 
 async def init_db() -> None:
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         await db.executescript(SCHEMA)
 
         cursor = await db.execute(
@@ -107,7 +107,7 @@ async def init_db() -> None:
 
 async def save_price_snapshot(stock: dict) -> bool:
     """Save a stock price snapshot once. Return False for duplicates."""
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         cursor = await db.execute(
             """
             INSERT OR IGNORE INTO stock_price_history (
@@ -150,7 +150,7 @@ async def save_price_snapshots(stocks: list[dict]) -> tuple[int, int]:
         for stock in stocks
     ]
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         cursor = await db.executemany(
             """
             INSERT OR IGNORE INTO stock_price_history (
@@ -181,7 +181,7 @@ async def get_price_history(
     if limit < 1:
         raise ValueError("limit must be at least 1")
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
 
         async with db.execute(
@@ -204,7 +204,7 @@ async def get_price_history(
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 async def save_profile(telegram_id: int, username: str | None, profile: dict) -> None:
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         await db.execute("""
             INSERT INTO user_profiles
             (telegram_id, username, experience, trading_style, capital_npr, risk_tolerance, max_risk_pct)
@@ -224,7 +224,7 @@ async def save_profile(telegram_id: int, username: str | None, profile: dict) ->
         await db.commit()
 
 async def get_profile(telegram_id: int) -> dict | None:
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT experience, trading_style, capital_npr, risk_tolerance, max_risk_pct "
@@ -237,7 +237,7 @@ async def get_profile(telegram_id: int) -> dict | None:
 async def check_db() -> bool:
     """Return True when SQLite can execute a basic query."""
     try:
-        async with aiosqlite.connect(settings.database_path) as db:
+        async with aiosqlite.connect(settings.database_path, timeout=30) as db:
             async with db.execute("SELECT 1") as cursor:
                 row = await cursor.fetchone()
                 return row == (1,)
@@ -253,7 +253,7 @@ async def get_indicator_prices(
     if limit < 1:
         raise ValueError("limit must be at least 1")
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         async with db.execute(
             """
             SELECT ltp
@@ -304,7 +304,7 @@ async def add_portfolio_holding(
         ):
             raise ValueError(f"{name} must be a finite positive number")
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         await db.execute(
             """
             INSERT INTO portfolio (
@@ -328,7 +328,7 @@ async def add_portfolio_holding(
 
 async def get_portfolio(telegram_id: int) -> list[dict]:
     """Return all stock holdings belonging to one Telegram user."""
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
@@ -348,7 +348,7 @@ async def remove_portfolio_holding(
     symbol: str,
 ) -> bool:
     """Remove one holding belonging to one Telegram user."""
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         cursor = await db.execute(
             """
             DELETE FROM portfolio
@@ -387,7 +387,7 @@ async def save_portfolio_daily_snapshot(
     ):
         raise ValueError("holdings_count must be a non-negative integer")
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         await db.execute(
             """
             INSERT INTO portfolio_daily_snapshots (
@@ -423,7 +423,7 @@ async def get_portfolio_daily_snapshots(
     if limit < 1:
         raise ValueError("limit must be at least 1")
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
 
         async with db.execute(
@@ -454,7 +454,7 @@ async def add_stock_price_alert(
     if condition not in ("above", "below"):
         raise ValueError("Condition must be above or below")
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         cursor = await db.execute(
             """
             INSERT INTO stock_price_alerts (
@@ -478,7 +478,7 @@ async def get_stock_price_alerts(
     active_only: bool = True,
 ) -> list[dict]:
     """Retrieve alerts belonging to one Telegram user."""
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
 
         if active_only:
@@ -505,7 +505,7 @@ async def get_stock_price_alerts(
 
 async def trigger_stock_price_alert(alert_id: int) -> bool:
     """Mark an active alert as triggered exactly once."""
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         cursor = await db.execute(
             """
             UPDATE stock_price_alerts
@@ -524,7 +524,7 @@ async def remove_stock_price_alert(
     alert_id: int,
 ) -> bool:
     """Cancel an alert belonging to its owner."""
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         cursor = await db.execute(
             """
             UPDATE stock_price_alerts
@@ -539,7 +539,7 @@ async def remove_stock_price_alert(
 
 async def get_all_active_stock_price_alerts() -> list[dict]:
     """Retrieve all active alerts for the background checker."""
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
 
         async with db.execute(
@@ -664,7 +664,7 @@ async def record_portfolio_transaction(
     }
     fees = fee_breakdown["total_fees"]
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         await db.execute("BEGIN IMMEDIATE")
 
         try:
@@ -788,7 +788,7 @@ async def get_portfolio_transactions(
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("Limit must be a positive integer.")
 
-    async with aiosqlite.connect(settings.database_path) as db:
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
         db.row_factory = aiosqlite.Row
 
         async with db.execute(
