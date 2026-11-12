@@ -1,0 +1,1553 @@
+from zoneinfo import ZoneInfo
+from datetime import datetime
+
+import logging
+import math
+
+from telegram import Update
+from telegram.ext import ContextTypes, ConversationHandler
+
+from database.db import (
+    save_profile,
+    get_profile,
+    check_db,
+    get_price_history,
+    add_portfolio_holding,
+    get_portfolio,
+    remove_portfolio_holding,
+    save_portfolio_daily_snapshot,
+    get_portfolio_daily_snapshots,
+    add_stock_price_alert,
+    get_stock_price_alerts,
+    remove_stock_price_alert,
+)
+
+from services.technical_analysis import get_technical_analysis
+from services.chart_generator import generate_price_chart
+
+
+EXPERIENCE, STYLE, CAPITAL, RISK, MAX_RISK = range(5)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["profile"] = {}
+    await update.message.reply_text(
+        "Welcome to NEPSE Mentor Bot 📊\n\n"
+        "I'll help you build a risk-aware NEPSE research profile.\n"
+        "First, choose your experience level: Beginner, Intermediate, or Advanced."
+    )
+    return EXPERIENCE
+
+async def save_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    value = update.message.text.strip().title()
+    if value not in {"Beginner", "Intermediate", "Advanced"}:
+        await update.message.reply_text("Please enter Beginner, Intermediate, or Advanced.")
+        return EXPERIENCE
+    context.user_data["profile"]["experience"] = value
+    await update.message.reply_text("Trading style? Enter Swing, Positional, or Long-term.")
+    return STYLE
+
+async def save_style(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    value = update.message.text.strip().title()
+    if value not in {"Swing", "Positional", "Long-Term"}:
+        await update.message.reply_text("Please enter Swing, Positional, or Long-term.")
+        return STYLE
+    context.user_data["profile"]["trading_style"] = value
+    await update.message.reply_text("What is your trading capital in NPR? Enter a number, e.g. 200000.")
+    return CAPITAL
+
+async def save_capital(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        value = float(update.message.text.replace(",", "").strip())
+        if value < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Enter a valid non-negative NPR amount, e.g. 200000.")
+        return CAPITAL
+    context.user_data["profile"]["capital_npr"] = value
+    await update.message.reply_text("Risk tolerance? Enter Low, Medium, or High.")
+    return RISK
+
+async def save_risk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    value = update.message.text.strip().title()
+    if value not in {"Low", "Medium", "High"}:
+        await update.message.reply_text("Please enter Low, Medium, or High.")
+        return RISK
+    context.user_data["profile"]["risk_tolerance"] = value
+    await update.message.reply_text("Maximum risk per trade in percent? Enter 0.5, 1, or 1.5 (maximum 5).")
+    return MAX_RISK
+
+async def save_max_risk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        value = float(update.message.text.strip().replace("%", ""))
+        if not 0 < value <= 5:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Enter a number greater than 0 and no more than 5.")
+        return MAX_RISK
+
+    profile = context.user_data["profile"]
+    profile["max_risk_pct"] = value
+    user = update.effective_user
+    await save_profile(user.id, user.username, profile)
+    context.user_data.pop("profile", None)
+    await update.message.reply_text(
+        "✅ Your profile has been saved.\n\n"
+        f"Experience: {profile['experience']}\n"
+        f"Style: {profile['trading_style']}\n"
+        f"Capital: NPR {profile['capital_npr']:,.2f}\n"
+        f"Risk tolerance: {profile['risk_tolerance']}\n"
+        f"Max risk/trade: {value:g}%\n\n"
+        "Next: /profile to view it, /help for commands.\n"
+        "Market analysis commands will be added in the next build phase."
+    )
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.pop("profile", None)
+    await update.message.reply_text("Onboarding cancelled. Send /start when you're ready.")
+    return ConversationHandler.END
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    data = await get_profile(update.effective_user.id)
+    if not data:
+        await update.message.reply_text("No profile saved yet. Send /start to set it up.")
+        return
+    await update.message.reply_text(
+        "👤 Your NEPSE Mentor profile\n"
+        f"Experience: {data['experience']}\n"
+        f"Trading style: {data['trading_style']}\n"
+        f"Capital: NPR {data['capital_npr']:,.2f}\n"
+        f"Risk tolerance: {data['risk_tolerance']}\n"
+        f"Maximum risk per trade: {data['max_risk_pct']:g}%"
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "📊 NEPSE Mentor Bot — Commands\n\n"
+        "👤 PROFILE\n"
+        "/start — create or update your profile\n"
+        "/profile — view saved profile\n\n"
+        "📈 MARKET ANALYSIS\n"
+        "/stock SYMBOL — stock information\n"
+        "/history SYMBOL — historical prices\n"
+        "/indicators SYMBOL — technical indicators\n"
+        "/gainers — top gaining stocks\n"
+        "/losers — top losing stocks\n"
+        "/chart SYMBOL [LIMIT] — technical chart\n"
+        "/compare SYMBOL1 SYMBOL2 — compare stocks\n\n"
+        "💼 PORTFOLIO\n"
+        "/addstock — add a portfolio holding\n"
+        "/portfolio — view your portfolio\n"
+        "/removestock SYMBOL — remove a holding\n"
+        "/allocation — view portfolio allocation\n"
+        "/diversification — check portfolio concentration\n"
+        "/performance — track portfolio performance\n\n"
+        "🔔 PRICE ALERTS\n"
+        "/alert SYMBOL above|below PRICE — create an alert\n"
+        "/alerts — view active alerts\n"
+        "/removealert ID — cancel an alert\n\n"
+        "🛠️ SYSTEM\n"
+        "/health — check bot status\n"
+        "/data_status — check market-data freshness\n"
+        "/help — show available commands\n\n"
+        "⚠️ Educational research only, not financial advice. "
+        "Market-feed prices are not verified live exchange quotes."
+    )
+
+async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lines = ["🏥 NEPSE Mentor System Health", ""]
+
+    # Telegram process
+    lines.append("✅ Telegram bot: Responding")
+
+    # SQLite database
+    try:
+        db_ok = await check_db()
+
+        if db_ok:
+            lines.append("✅ SQLite database: Connected")
+        else:
+            lines.append("❌ SQLite database: Failed")
+
+    except Exception:
+        logging.exception("Database health check failed")
+        lines.append("❌ SQLite database: Error")
+
+    # NEPSE market-data provider
+    try:
+        stocks = await fetch_market_data()
+        fresh_count = sum(1 for stock in stocks if not stock["is_stale"])
+        stale_count = len(stocks) - fresh_count
+        stale_percentage = stale_count / len(stocks) * 100
+        fresh_count = sum(1 for stock in stocks if not stock["is_stale"])
+        stale_count = len(stocks) - fresh_count
+        stale_percentage = stale_count / len(stocks) * 100
+
+        newest = min(
+            stocks,
+            key=lambda stock: stock["age_minutes"],
+        )
+
+        age = newest["age_minutes"]
+        timestamp = newest["last_updated"]
+        source = newest["source"]
+
+        lines.append("")
+
+        if newest["is_stale"]:
+            lines.append("⚠️ NEPSE feed: Reachable, but stale")
+        else:
+            lines.append("✅ NEPSE feed: Reachable and fresh")
+
+        lines.append(f"📊 Valid stock records: {len(stocks)}")
+        lines.append(f"🕒 Newest update: {timestamp}")
+        lines.append(f"⌛ Data age: {age} minutes")
+        lines.append(f"📡 Source: {source}")
+        lines.append(f"Fresh stock records: {fresh_count}")
+        lines.append(f"Stale stock records: {stale_count}")
+        lines.append(f"Stale data percentage: {stale_percentage:.1f}%")
+   
+    except MarketDataError as exc:
+        logging.warning("NEPSE feed health check failed: %s", exc)
+        lines.append("")
+        lines.append("❌ NEPSE feed: Unavailable or invalid")
+        lines.append(f"Reason: {exc}")
+
+    except Exception:
+        logging.exception("Unexpected NEPSE feed health error")
+        lines.append("")
+        lines.append("❌ NEPSE feed: Error")
+
+    lines.append("")
+    lines.append(
+        "⚠️ Educational analysis only — not financial advice. "
+        "NEPSE is volatile; trade at your own risk."
+    )
+
+    await update.message.reply_text("\n".join(lines))
+from services.nepse_data import (
+    get_stock,
+    get_market_movers,
+    fetch_market_data,
+    MarketDataError,
+)
+
+async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    disclaimer = (
+        "\n\n⚠️ Educational analysis only — not financial advice. "
+        "NEPSE is volatile; trade at your own risk."
+    )
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /stock SYMBOL\nExample: /stock NABIL" + disclaimer
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Please use a valid symbol, e.g. NABIL."
+            + disclaimer
+        )
+        return
+
+    try:
+        stock = await get_stock(symbol)
+
+    except MarketDataError as exc:
+        await update.message.reply_text(
+            f"⚠️ Market data unavailable: {exc}\n"
+            "Please try again later."
+            + disclaimer
+        )
+        return
+
+    except Exception:
+        logging.exception("Unexpected error retrieving stock %s", symbol)
+        await update.message.reply_text(
+            "⚠️ Something went wrong while retrieving stock data."
+            + disclaimer
+        )
+        return
+
+    if stock is None:
+        await update.message.reply_text(
+            f"Stock symbol {symbol} was not found in the data feed."
+            + disclaimer
+        )
+        return
+    if stock is None:
+        await update.message.reply_text(
+            f"Stock symbol {symbol} was not found in the data feed." + disclaimer
+        )
+        return
+
+    def show(value, suffix=""):
+        if value is None:
+            return "N/A"
+        try:
+            number = float(value)
+            if not math.isfinite(number):
+                return "N/A"
+            return f"{number:,.2f}{suffix}"
+        except (TypeError, ValueError):
+            return "N/A"
+
+    status = (
+        "⚠️ STALE DATA — do not treat this as a current market quote."
+        if stock["is_stale"]
+        else "✅ Data is within the 24-hour freshness threshold."
+    )
+
+    message = (
+        f"📊 {stock['name']} ({stock['symbol']})\n\n"
+	f"{status}\n\n"
+        f"Last traded price: NPR {show(stock['ltp'])}\n"
+        f"Previous close: NPR {show(stock['previous_close'])}\n"
+        f"Change: NPR {show(stock['change'])}\n"
+        f"Change %: {show(stock['percent_change'], '%')}\n"
+        f"High: NPR {show(stock['high'])}\n"
+        f"Low: NPR {show(stock['low'])}\n"
+        f"Volume: {show(stock['volume'])}\n"
+        f"Turnover: NPR {show(stock['turnover'])}\n"
+        f"Trades: {show(stock.get('trades'))}\n\n"
+        f"Last updated: {stock['last_updated']}\n"
+        f"Data age: {stock['age_minutes']} minutes\n"
+        f"Source: {stock['source']}\n\n"
+        "⚠️ Educational analysis only — not financial advice. "
+        "NEPSE is volatile; trade at your own risk."
+    )
+
+    await update.message.reply_text(message)
+
+
+async def market_movers_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    direction: str,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Educational analysis only — not financial advice. "
+        "NEPSE is volatile; trade at your own risk."
+    )
+
+    title = "📈 TOP GAINERS" if direction == "gainers" else "📉 TOP LOSERS"
+
+    try:
+        stocks = await get_market_movers(direction, limit=10)
+
+    except MarketDataError as exc:
+        await update.message.reply_text(
+            f"⚠️ Market data unavailable: {exc}\n"
+            "Please try again later."
+            + disclaimer
+        )
+        return
+
+    except Exception:
+        logging.exception("Failed to retrieve %s", direction)
+        await update.message.reply_text(
+            "⚠️ Something went wrong retrieving market movers."
+            + disclaimer
+        )
+        return
+
+    if not stocks:
+        await update.message.reply_text(
+            f"No {direction} found in the available market data."
+            + disclaimer
+        )
+        return
+
+
+    lines = [title]
+
+    if any(stock["is_stale"] for stock in stocks):
+        lines.append(
+            "⚠️ STALE DATA: These may not represent today's market movers."
+        )
+
+    lines.extend([
+        "Source: YONEPSE community data feed",
+        "",
+    ])
+
+    for index, stock in enumerate(stocks, start=1):
+        status = " ⚠️ STALE" if stock["is_stale"] else ""
+
+        age_minutes = stock["age_minutes"]
+        age_hours = int(age_minutes // 60)
+        age_days, remaining_hours = divmod(age_hours, 24)
+
+        if age_days:
+            age_label = f"{age_days}d {remaining_hours}h"
+        elif age_hours:
+            age_label = f"{age_hours}h {int(age_minutes % 60)}m"
+        else:
+            age_label = f"{int(age_minutes)}m"
+
+        lines.append(
+            f"{index}. {stock['symbol']}\n"
+            f"   Price: NPR {stock['ltp']:,.2f}\n"
+            f"   Change: {stock['percent_change']:+.2f}%\n"
+            f"   Updated: {stock['last_updated']}\n"
+            f"   Data age: {age_label}{status}"
+        )
+
+    await update.message.reply_text(
+        "\n".join(lines) + disclaimer
+    )
+
+async def gainers_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    await market_movers_command(update, context, "gainers")
+
+async def losers_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    await market_movers_command(update, context, "losers")
+
+async def data_status_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    try:
+        stocks = await fetch_market_data()
+
+        fresh_count = sum(1 for stock in stocks if not stock['is_stale'])
+        stale_count = len(stocks) - fresh_count
+        stale_percentage = stale_count / len(stocks) * 100
+
+        newest = min(
+            stocks,
+            key=lambda stock: stock["age_minutes"],
+        )
+
+        age = newest["age_minutes"]
+        hours = age // 60
+        minutes = age % 60
+
+        if newest["is_stale"]:
+            status = "⚠️ STALE"
+            recommendation = (
+                "Do not treat these prices as live. "
+                "Wait for refreshed market data."
+            )
+        else:
+            status = "✅ FRESH"
+            recommendation = (
+                "Data is within the 24-hour freshness threshold. "
+                "Verify the timestamp before making decisions."
+            )
+
+        message = (
+            "📡 NEPSE Market Data Status\n\n"
+            f"Provider: {newest['source']}\n"
+            f"Status: {status}\n\n"
+            f"Valid stock records: {len(stocks)}\n"
+            f"Fresh stock records: {fresh_count}\n"
+	    f"Stale stock records: {stale_count}\n"
+	    f"Stale data percentage: {stale_percentage:.1f}%\n"
+	    f"Newest update: {newest['last_updated']}\n"
+            f"Data age: {hours} hours, {minutes} minutes\n\n"
+            f"Recommendation:\n{recommendation}\n\n"
+            "⚠️ Educational analysis only — not financial advice. "
+            "NEPSE is volatile; trade at your own risk."
+        )
+
+    except MarketDataError as exc:
+        logging.warning("Data status check failed: %s", exc)
+        message = (
+            "📡 NEPSE Market Data Status\n\n"
+            "❌ Provider: Unavailable or invalid data\n"
+            f"Reason: {exc}\n\n"
+            "Do not rely on unverified market prices.\n\n"
+            "⚠️ Educational analysis only — not financial advice. "
+            "NEPSE is volatile; trade at your own risk."
+        )
+
+    except Exception:
+        logging.exception("Unexpected data status error")
+        message = (
+            "📡 NEPSE Market Data Status\n\n"
+            "❌ Unable to check the market-data provider.\n\n"
+            "⚠️ Educational analysis only — not financial advice. "
+            "NEPSE is volatile; trade at your own risk."
+        )
+    await update.message.reply_text(message)
+
+async def history_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Historical prices are for educational research only, "
+        "not financial advice."
+    )
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /history SYMBOL [LIMIT]\n"
+            "Examples: /history NABIL\n"
+            "/history NABIL 30\n"
+            "/history NABIL 100"
+            + disclaimer
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Please use a valid symbol, e.g. NABIL."
+            + disclaimer
+        )
+        return
+
+    limit = 10
+
+    if len(context.args) > 2:
+        await update.message.reply_text(
+            "Usage: /history SYMBOL [LIMIT]" + disclaimer
+        )
+        return
+
+    if len(context.args) == 2:
+        try:
+            limit = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text(
+                "Limit must be a whole number. Example: /history NABIL 30"
+                + disclaimer
+            )
+            return
+
+        if limit < 1 or limit > 100:
+            await update.message.reply_text(
+                "Limit must be between 1 and 100."
+                + disclaimer
+            )
+            return
+
+    try:
+        records = await get_price_history(symbol, limit=limit)
+
+    except Exception:
+        logging.exception(
+            "Failed to retrieve price history for %s",
+            symbol,
+        )
+        await update.message.reply_text(
+            "⚠️ Unable to retrieve historical prices right now."
+            + disclaimer
+        )
+        return
+
+    if not records:
+        await update.message.reply_text(
+            f"No historical data found for {symbol} yet.\n"
+            "Fresh price snapshots will appear here once collected."
+            + disclaimer
+        )
+        return
+
+    lines = [
+        f"📈 Historical Prices — {symbol}",
+        "",
+        f"Showing {len(records)} most recent stored records:",
+        "",
+    ]
+
+    for record in records:
+        ltp = record.get("ltp")
+        try:
+            price = float(ltp)
+            price_text = (
+                f"{price:,.2f}"
+                if math.isfinite(price)
+                else "N/A"
+            )
+        except (TypeError, ValueError):
+            price_text = "N/A"
+
+        lines.append(
+            f"📅 {record.get('source_updated_at', 'Unknown date')}\n"
+            f"Price: NPR {price_text}"
+        )
+
+        for field, label in (
+            ("volume", "Volume"),
+            ("turnover", "Turnover"),
+        ):
+            value = record.get(field)
+            if value is not None:
+                try:
+                    number = float(value)
+                    if math.isfinite(number):
+                        lines.append(f"{label}: {number:,.2f}")
+                except (TypeError, ValueError):
+                    pass
+
+        lines.append("")
+
+    lines.append(
+        "⚠️ Historical data is not a live quote."
+        + disclaimer
+    )
+
+    message = "\n".join(lines)
+
+    for offset in range(0, len(message), 4000):
+        await update.message.reply_text(message[offset:offset + 4000])
+
+
+async def chart_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if not context.args or len(context.args) > 2:
+        await update.message.reply_text(
+            "Usage: /chart SYMBOL [LIMIT]\n"
+            "Examples:\n"
+            "/chart NABIL\n"
+            "/chart NABIL 60\n"
+            "/chart NABIL 90\n"
+            "/chart NABIL 180\n"
+            "Limit: 1-250 observations."
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Example: /chart NABIL"
+        )
+        return
+
+    limit = 30
+
+    if len(context.args) == 2:
+        try:
+            limit = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text(
+                "Invalid limit. Please enter a number from 1 to 250."
+            )
+            return
+
+    if not 1 <= limit <= 250:
+        await update.message.reply_text(
+            "Chart limit must be between 1 and 250."
+        )
+        return
+
+    try:
+        records = await get_price_history(symbol, limit=limit)
+
+        if not records:
+            await update.message.reply_text(
+                f"No historical data found for {symbol}."
+            )
+            return
+
+        chart = generate_price_chart(records, symbol)
+        chart.name = f"{symbol}_historical_ltp.png"
+
+        await update.message.reply_photo(
+            photo=chart,
+            caption=(
+                f"📈 {symbol} — Historical LTP\n"
+                f"Showing {len(records)} recent stored observations.\n"
+                "Historical data is not a live quote or verified "
+                "official closing-price series.\n"
+                "For educational research only, not financial advice."
+            ),
+        )
+
+    except Exception:
+        logging.exception(
+            "Failed to generate historical chart for %s",
+            symbol,
+        )
+        await update.message.reply_text(
+            "⚠️ Unable to generate the historical chart right now."
+        )
+
+
+async def indicators_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Based on latest daily snapshots, not verified "
+        "official closing prices. Educational research only — "
+        "not financial advice."
+    )
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /indicators SYMBOL\n"
+            "Example: /indicators NABIL"
+            + disclaimer
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Please use a valid symbol, e.g. NABIL."
+            + disclaimer
+        )
+        return
+
+    try:
+        result = await get_technical_analysis(symbol)
+
+    except Exception:
+        logging.exception(
+            "Failed to calculate technical indicators for %s",
+            symbol,
+        )
+        await update.message.reply_text(
+            "⚠️ Unable to calculate technical indicators right now."
+            + disclaimer
+        )
+        return
+
+    indicators = result["indicators"]
+    observations = result["observations"]
+
+    def format_value(value):
+        if value is None:
+            return "Insufficient history"
+        return f"{value:.2f}"
+
+    macd = indicators["macd"]
+
+    if macd is None:
+        macd_value = "Insufficient history"
+        signal_value = "Insufficient history"
+        histogram_value = "Insufficient history"
+    else:
+        macd_value = format_value(macd["macd"])
+        signal_value = format_value(macd["signal"])
+        histogram_value = format_value(macd["histogram"])
+
+    lines = [
+        f"📊 Technical Indicators — {symbol}",
+        "",
+        f"Daily observations: {observations}",
+        "",
+        f"SMA 20: {format_value(indicators['sma_20'])}",
+        f"SMA 50: {format_value(indicators['sma_50'])}",
+        f"EMA 20: {format_value(indicators['ema_20'])}",
+        f"EMA 50: {format_value(indicators['ema_50'])}",
+        f"RSI 14: {format_value(indicators['rsi_14'])}",
+        f"MACD: {macd_value}",
+        f"Signal: {signal_value}",
+        f"Histogram: {histogram_value}",
+    ]
+
+    if observations == 0:
+        lines.extend([
+            "",
+            "No daily price history is available yet.",
+        ])
+
+    lines.append(disclaimer)
+
+    await update.message.reply_text("\n".join(lines))
+
+
+
+
+async def compare_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Based on historical daily snapshots, not verified "
+        "official closing prices. Educational research only — "
+        "not financial advice."
+    )
+
+    if len(context.args) != 2:
+        await update.message.reply_text(
+            "Usage: /compare SYMBOL1 SYMBOL2\n"
+            "Example: /compare NABIL NICA"
+            + disclaimer
+        )
+        return
+
+    symbol1 = context.args[0].strip().upper()
+    symbol2 = context.args[1].strip().upper()
+
+    if not symbol1.isalnum() or not symbol2.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Use valid symbols such as NABIL and NICA."
+            + disclaimer
+        )
+        return
+
+    if symbol1 == symbol2:
+        await update.message.reply_text(
+            "Please enter two different stock symbols."
+            + disclaimer
+        )
+        return
+
+    try:
+        result1 = await get_technical_analysis(symbol1)
+        result2 = await get_technical_analysis(symbol2)
+
+        history1 = await get_price_history(symbol1, limit=30)
+        history2 = await get_price_history(symbol2, limit=30)
+
+    except Exception:
+        logging.exception(
+            "Failed to compare %s and %s",
+            symbol1,
+            symbol2,
+        )
+        await update.message.reply_text(
+            "⚠️ Unable to compare these stocks right now."
+            + disclaimer
+        )
+        return
+
+    def format_value(value):
+        if value is None:
+            return "Insufficient history"
+        return f"{value:.2f}"
+
+    def calculate_performance(records):
+        if len(records) < 2:
+            return None
+
+        latest = float(records[0]["ltp"])
+        starting = float(records[-1]["ltp"])
+
+        if starting <= 0:
+            return None
+
+        change = latest - starting
+        percentage = (change / starting) * 100
+
+        return {
+            "starting": starting,
+            "latest": latest,
+            "change": change,
+            "percentage": percentage,
+            "observations": len(records),
+        }
+
+    def format_performance(records):
+        performance = calculate_performance(records)
+
+        if performance is None:
+            return "30-observation performance: Insufficient history"
+
+        return (
+            f"Performance ({performance['observations']} observations):\n"
+            f"Starting LTP: NPR {performance['starting']:.2f}\n"
+            f"Latest LTP: NPR {performance['latest']:.2f}\n"
+            f"Change: NPR {performance['change']:+.2f}\n"
+            f"Change: {performance['percentage']:+.2f}%"
+        )
+
+    def format_stock(result, history):
+        indicators = result["indicators"]
+        macd = indicators["macd"]
+
+        if macd is None:
+            macd_text = (
+                "MACD: Insufficient history\n"
+                "Signal: Insufficient history\n"
+                "Histogram: Insufficient history"
+            )
+        else:
+            macd_text = (
+                f"MACD: {format_value(macd['macd'])}\n"
+                f"Signal: {format_value(macd['signal'])}\n"
+                f"Histogram: {format_value(macd['histogram'])}"
+            )
+
+        return (
+            f"📊 {result['symbol']}\n"
+            f"Observations: {result['observations']}\n"
+            f"SMA 20: {format_value(indicators['sma_20'])}\n"
+            f"SMA 50: {format_value(indicators['sma_50'])}\n"
+            f"RSI 14: {format_value(indicators['rsi_14'])}\n"
+            f"{macd_text}\n\n"
+            f"{format_performance(history)}"
+        )
+
+    performance1 = calculate_performance(history1)
+    performance2 = calculate_performance(history2)
+
+    summary = ""
+
+    if performance1 is not None and performance2 is not None:
+        if performance1["percentage"] > performance2["percentage"]:
+            winner = symbol1
+        elif performance2["percentage"] > performance1["percentage"]:
+            winner = symbol2
+        else:
+            winner = None
+
+        if winner:
+            summary = (
+                f"\n\n🏆 Better historical performer: {winner}"
+            )
+        else:
+            summary = "\n\nBoth stocks have equal percentage performance."
+
+    message = (
+        f"📈 STOCK COMPARISON\n\n"
+        f"{format_stock(result1, history1)}\n\n"
+        f"--------------------\n\n"
+        f"{format_stock(result2, history2)}"
+        f"{summary}"
+        + disclaimer
+    )
+
+    await update.message.reply_text(message)
+
+
+async def addstock_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if len(context.args) != 3:
+        await update.message.reply_text(
+            "Usage: /addstock SYMBOL QUANTITY BUY_PRICE\n"
+            "Example: /addstock NABIL 10 500"
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text("Invalid stock symbol.")
+        return
+
+    try:
+        quantity = float(context.args[1])
+        buy_price = float(context.args[2])
+
+        if (
+            not math.isfinite(quantity)
+            or not math.isfinite(buy_price)
+            or quantity <= 0
+            or buy_price <= 0
+        ):
+            raise ValueError
+
+    except ValueError:
+        await update.message.reply_text(
+            "Quantity and buying price must be positive numbers."
+        )
+        return
+
+    telegram_id = update.effective_user.id
+
+    try:
+        await add_portfolio_holding(
+            telegram_id,
+            symbol,
+            quantity,
+            buy_price,
+        )
+    except Exception:
+        logging.exception("Failed to save portfolio holding")
+        await update.message.reply_text(
+            "Unable to save this holding right now."
+        )
+        return
+
+    await update.message.reply_text(
+        f"✅ Portfolio holding saved.\n\n"
+        f"Stock: {symbol}\n"
+        f"Quantity: {quantity:g}\n"
+        f"Average buying price: NPR {buy_price:.2f}\n"
+        f"Total investment: NPR {quantity * buy_price:,.2f}"
+    )
+
+
+
+
+async def portfolio_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    telegram_id = update.effective_user.id
+
+    try:
+        holdings = await get_portfolio(telegram_id)
+
+        if not holdings:
+            await update.message.reply_text(
+                "Your portfolio is empty.\n\n"
+                "Add a holding using:\n"
+                "/addstock NABIL 10 500"
+            )
+            return
+
+        lines = ["📊 YOUR NEPSE PORTFOLIO\n"]
+        total_investment = 0.0
+        priced_investment = 0.0
+        total_current_value = 0.0
+
+        for holding in holdings:
+            symbol = holding["symbol"]
+            quantity = float(holding["quantity"])
+            buy_price = float(holding["average_buy_price"])
+
+            investment = quantity * buy_price
+            total_investment += investment
+
+            history = await get_price_history(symbol, limit=1)
+
+            if not history:
+                lines.append(
+                    f"📌 {symbol}\n"
+                    f"Quantity: {quantity:g}\n"
+                    f"Average buy price: NPR {buy_price:.2f}\n"
+                    f"Investment: NPR {investment:,.2f}\n"
+                    "Latest LTP: Unavailable\n"
+                )
+                continue
+
+            latest_ltp = float(history[0]["ltp"])
+            current_value = quantity * latest_ltp
+            profit_loss = current_value - investment
+            percentage = (profit_loss / investment) * 100
+
+            priced_investment += investment
+            total_current_value += current_value
+
+            lines.append(
+                f"📌 {symbol}\n"
+                f"Quantity: {quantity:g}\n"
+                f"Average buy price: NPR {buy_price:.2f}\n"
+                f"Latest LTP: NPR {latest_ltp:.2f}\n"
+                f"Investment: NPR {investment:,.2f}\n"
+                f"Current value: NPR {current_value:,.2f}\n"
+                f"P/L: NPR {profit_loss:+,.2f} "
+                f"({percentage:+.2f}%)\n"
+            )
+
+        lines.append(
+            "--------------------\n"
+            f"Total investment: NPR {total_investment:,.2f}"
+        )
+
+        if priced_investment > 0:
+            total_profit_loss = total_current_value - priced_investment
+            total_percentage = (
+                total_profit_loss / priced_investment
+            ) * 100
+
+            lines.append(
+                f"Priced holdings investment: "
+                f"NPR {priced_investment:,.2f}\n"
+                f"Current value of priced holdings: "
+                f"NPR {total_current_value:,.2f}\n"
+                f"Portfolio P/L: NPR {total_profit_loss:+,.2f} "
+                f"({total_percentage:+.2f}%)"
+            )
+
+        lines.append(
+            "\n⚠️ Values use the latest available historical LTP "
+            "snapshots, not verified live quotes. "
+            "Educational research only — not financial advice."
+        )
+
+        await update.message.reply_text("\n".join(lines))
+
+    except Exception:
+        logging.exception("Failed to calculate portfolio")
+        await update.message.reply_text(
+            "Unable to retrieve your portfolio right now."
+        )
+
+
+async def removestock_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /removestock SYMBOL\n"
+            "Example: /removestock NABIL"
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text("Invalid stock symbol.")
+        return
+
+    try:
+        removed = await remove_portfolio_holding(
+            update.effective_user.id,
+            symbol,
+        )
+    except Exception:
+        logging.exception("Failed to remove portfolio holding")
+        await update.message.reply_text(
+            "Unable to remove this holding right now."
+        )
+        return
+
+    if removed:
+        await update.message.reply_text(
+            f"✅ {symbol} removed from your portfolio."
+        )
+    else:
+        await update.message.reply_text(
+            f"{symbol} was not found in your portfolio."
+        )
+
+
+async def allocation_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    try:
+        holdings = await get_portfolio(update.effective_user.id)
+
+        if not holdings:
+            await update.message.reply_text(
+                "Your portfolio is empty.\n"
+                "Use /addstock to add a holding."
+            )
+            return
+
+        values = []
+        total_value = 0.0
+
+        for holding in holdings:
+            symbol = holding["symbol"]
+            quantity = float(holding["quantity"])
+
+            history = await get_price_history(symbol, limit=1)
+
+            if not history:
+                continue
+
+            latest_ltp = float(history[0]["ltp"])
+            current_value = quantity * latest_ltp
+
+            values.append((symbol, current_value))
+            total_value += current_value
+
+        if not values or total_value <= 0:
+            await update.message.reply_text(
+                "No usable historical prices are available "
+                "for your portfolio."
+            )
+            return
+
+        lines = ["📊 PORTFOLIO ALLOCATION\n"]
+
+        values.sort(key=lambda item: item[1], reverse=True)
+
+        for symbol, current_value in values:
+            percentage = current_value / total_value * 100
+
+            lines.append(
+                f"📌 {symbol}\n"
+                f"Current value: NPR {current_value:,.2f}\n"
+                f"Allocation: {percentage:.2f}%\n"
+            )
+
+        lines.append(
+            f"Total portfolio value: NPR {total_value:,.2f}"
+        )
+
+        lines.append(
+            "\n⚠️ Based on historical LTP snapshots, not verified "
+            "live quotes. Educational research only — "
+            "not financial advice."
+        )
+
+        await update.message.reply_text("\n".join(lines))
+
+    except Exception:
+        logging.exception("Failed to calculate portfolio allocation")
+        await update.message.reply_text(
+            "Unable to calculate portfolio allocation right now."
+        )
+
+
+async def diversification_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    try:
+        holdings = await get_portfolio(update.effective_user.id)
+
+        if not holdings:
+            await update.message.reply_text(
+                "Your portfolio is empty.\n"
+                "Use /addstock to add holdings."
+            )
+            return
+
+        values = []
+
+        for holding in holdings:
+            symbol = holding["symbol"]
+            quantity = float(holding["quantity"])
+
+            history = await get_price_history(symbol, limit=1)
+
+            if not history:
+                continue
+
+            latest_ltp = float(history[0]["ltp"])
+            current_value = quantity * latest_ltp
+
+            if current_value > 0:
+                values.append((symbol, current_value))
+
+        if not values:
+            await update.message.reply_text(
+                "No usable historical prices are available."
+            )
+            return
+
+        values.sort(key=lambda item: item[1], reverse=True)
+
+        total_value = sum(value for _, value in values)
+
+        largest_symbol, largest_value = values[0]
+        largest_percentage = largest_value / total_value * 100
+
+        top_two_value = sum(value for _, value in values[:2])
+        top_two_percentage = top_two_value / total_value * 100
+
+        lines = [
+            "🛡️ PORTFOLIO DIVERSIFICATION REPORT\n",
+            f"Priced stocks: {len(values)}",
+            f"Total current value: NPR {total_value:,.2f}",
+            "",
+            f"Largest holding: {largest_symbol}",
+            f"Largest holding weight: {largest_percentage:.2f}%",
+            f"Top two holdings weight: {top_two_percentage:.2f}%",
+            "",
+        ]
+
+        if largest_percentage > 50:
+            lines.append(
+                "⚠️ High concentration: one stock represents "
+                "more than 50% of your portfolio."
+            )
+        elif top_two_percentage > 80:
+            lines.append(
+                "⚠️ High concentration: your top two stocks "
+                "represent more than 80% of your portfolio."
+            )
+        else:
+            lines.append(
+                "No concentration warning under these simple thresholds."
+            )
+
+        lines.append(
+            "\n⚠️ Based on historical LTP snapshots, not verified "
+            "live quotes. This is a simple concentration check, "
+            "not a complete risk assessment."
+        )
+
+        await update.message.reply_text("\n".join(lines))
+
+    except Exception:
+        logging.exception("Failed to calculate diversification")
+        await update.message.reply_text(
+            "Unable to calculate diversification right now."
+        )
+
+
+async def performance_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    try:
+        telegram_id = update.effective_user.id
+        today = datetime.now(
+            ZoneInfo("Asia/Kathmandu")
+        ).date().isoformat()
+
+        holdings = await get_portfolio(telegram_id)
+
+        if not holdings:
+            await update.message.reply_text(
+                "Your portfolio is empty.\n"
+                "Use /addstock to add holdings."
+            )
+            return
+
+        total_investment = 0.0
+        current_value = 0.0
+        priced_count = 0
+        lines = ["📈 PORTFOLIO PERFORMANCE\n"]
+
+        for holding in holdings:
+            symbol = holding["symbol"]
+            quantity = float(holding["quantity"])
+            buy_price = float(holding["average_buy_price"])
+
+            history = await get_price_history(symbol, limit=1)
+
+            if not history:
+                lines.append(
+                    f"{symbol}: Historical price unavailable\n"
+                )
+                continue
+
+            latest_ltp = float(history[0]["ltp"])
+            investment = quantity * buy_price
+            value = quantity * latest_ltp
+            profit_loss = value - investment
+            percentage = profit_loss / investment * 100
+
+            total_investment += investment
+            current_value += value
+            priced_count += 1
+
+            lines.append(
+                f"📌 {symbol}\n"
+                f"Investment: NPR {investment:,.2f}\n"
+                f"Current value: NPR {value:,.2f}\n"
+                f"P/L: NPR {profit_loss:+,.2f} "
+                f"({percentage:+.2f}%)\n"
+            )
+
+        if priced_count == 0 or total_investment <= 0:
+            await update.message.reply_text(
+                "No usable historical prices are available "
+                "for your portfolio."
+            )
+            return
+
+        total_profit_loss = current_value - total_investment
+        total_percentage = (
+            total_profit_loss / total_investment
+        ) * 100
+
+        previous_snapshots = await get_portfolio_daily_snapshots(
+            telegram_id,
+            limit=30,
+        )
+
+        previous_snapshot = next(
+            (
+                snapshot
+                for snapshot in previous_snapshots
+                if snapshot["snapshot_date"] < today
+            ),
+            None,
+        )
+
+        await save_portfolio_daily_snapshot(
+            telegram_id,
+            today,
+            total_investment,
+            current_value,
+            priced_count,
+        )
+
+        lines.extend([
+            "--------------------",
+            f"Snapshot date: {today}",
+            f"Priced holdings: {priced_count}",
+            f"Total investment: NPR {total_investment:,.2f}",
+            f"Current value: NPR {current_value:,.2f}",
+            f"Portfolio P/L: NPR {total_profit_loss:+,.2f} "
+            f"({total_percentage:+.2f}%)",
+        ])
+
+        if previous_snapshot:
+            previous_value = float(
+                previous_snapshot["current_value"]
+            )
+            change = current_value - previous_value
+            change_percentage = (
+                change / previous_value * 100
+                if previous_value > 0 else 0.0
+            )
+
+            lines.append(
+                f"\nChange since {previous_snapshot['snapshot_date']}:\n"
+                f"NPR {change:+,.2f} "
+                f"({change_percentage:+.2f}%)"
+            )
+        else:
+            lines.append(
+                "\nFirst daily snapshot saved. "
+                "Run /performance on a later day to compare."
+            )
+
+        lines.append(
+            "\n⚠️ Uses historical LTP snapshots, not verified "
+            "live quotes. Tracking starts from the first saved "
+            "snapshot. Educational research only — not financial advice."
+        )
+
+        await update.message.reply_text("\n".join(lines))
+
+    except Exception:
+        logging.exception("Failed to calculate portfolio performance")
+        await update.message.reply_text(
+            "Unable to calculate portfolio performance right now."
+        )
+
+
+async def alert_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Create an above or below stock price alert."""
+    import math
+
+    if len(context.args) != 3:
+        await update.message.reply_text(
+            "Usage: /alert SYMBOL above|below PRICE\n"
+            "Example: /alert NABIL above 600"
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+    condition = context.args[1].strip().lower()
+
+    if not symbol.isalnum():
+        await update.message.reply_text("Invalid stock symbol.")
+        return
+
+    if condition not in ("above", "below"):
+        await update.message.reply_text(
+            "Condition must be 'above' or 'below'."
+        )
+        return
+
+    try:
+        target_price = float(context.args[2])
+    except (TypeError, ValueError):
+        await update.message.reply_text("Enter a valid target price.")
+        return
+
+    if not math.isfinite(target_price) or target_price <= 0:
+        await update.message.reply_text(
+            "Target price must be a positive number."
+        )
+        return
+
+    try:
+        alert_id = await add_stock_price_alert(
+            update.effective_user.id,
+            symbol,
+            condition,
+            target_price,
+        )
+        await update.message.reply_text(
+            f"✅ Price alert created.\n"
+            f"ID: {alert_id}\n"
+            f"Stock: {symbol}\n"
+            f"Condition: {condition.upper()}\n"
+            f"Target: NPR {target_price:,.2f}"
+        )
+    except Exception:
+        logging.exception("Failed to create stock price alert")
+        await update.message.reply_text(
+            "Unable to create the alert right now."
+        )
+
+
+async def alerts_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Show the user's active stock price alerts."""
+    try:
+        alerts = await get_stock_price_alerts(
+            update.effective_user.id
+        )
+
+        if not alerts:
+            await update.message.reply_text(
+                "You have no active price alerts.\n"
+                "Example: /alert NABIL above 600"
+            )
+            return
+
+        lines = ["🔔 YOUR ACTIVE PRICE ALERTS\n"]
+
+        for alert in alerts:
+            lines.append(
+                f"ID: {alert['id']} | {alert['symbol']}\n"
+                f"Condition: {alert['condition'].upper()}\n"
+                f"Target: NPR {alert['target_price']:,.2f}\n"
+            )
+
+        lines.append("Remove an alert with /removealert ID")
+
+        await update.message.reply_text("\n".join(lines))
+
+    except Exception:
+        logging.exception("Failed to retrieve stock price alerts")
+        await update.message.reply_text(
+            "Unable to retrieve your alerts right now."
+        )
+
+
+async def removealert_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Cancel one of the user's active price alerts."""
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /removealert ID\n"
+            "Example: /removealert 1"
+        )
+        return
+
+    try:
+        alert_id = int(context.args[0])
+        if alert_id <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "Alert ID must be a positive integer."
+        )
+        return
+
+    try:
+        removed = await remove_stock_price_alert(
+            update.effective_user.id,
+            alert_id,
+        )
+
+        if removed:
+            await update.message.reply_text(
+                f"✅ Alert #{alert_id} cancelled."
+            )
+        else:
+            await update.message.reply_text(
+                "Active alert not found. Check its ID with /alerts."
+            )
+
+    except Exception:
+        logging.exception("Failed to remove stock price alert")
+        await update.message.reply_text(
+            "Unable to remove the alert right now."
+        )
