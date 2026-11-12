@@ -1690,8 +1690,21 @@ async def transactions_command(
             f"{action} {item['symbol']}\n"
             f"Quantity: {item['quantity']:g}\n"
             f"Price: NPR {item['price']:,.2f}\n"
-            f"Fees: NPR {item['fees']:,.2f}"
+            f"Trade value: NPR "
+            f"{item['quantity'] * item['price']:,.2f}"
         )
+
+        if item["broker_commission"] is not None:
+            entry += (
+                f"\nBroker commission: "
+                f"NPR {item['broker_commission']:,.2f}"
+                f"\nSEBON fee: NPR {item['sebon_fee']:,.2f}"
+                f"\nDP charge: NPR {item['dp_charge']:,.2f}"
+            )
+        else:
+            entry += "\nFee breakdown: Unavailable (historical record)"
+
+        entry += f"\nTotal fees: NPR {item['fees']:,.2f}"
 
         if item['realized_profit_loss'] is not None:
             entry += (

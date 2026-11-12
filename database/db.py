@@ -86,6 +86,23 @@ WHERE status = 'active';
 async def init_db() -> None:
     async with aiosqlite.connect(settings.database_path) as db:
         await db.executescript(SCHEMA)
+
+        cursor = await db.execute(
+            "PRAGMA table_info(portfolio_transactions)"
+        )
+        columns = {row[1] for row in await cursor.fetchall()}
+
+        for column in (
+            "broker_commission",
+            "sebon_fee",
+            "dp_charge",
+        ):
+            if column not in columns:
+                await db.execute(
+                    f"ALTER TABLE portfolio_transactions "
+                    f"ADD COLUMN {column} REAL"
+                )
+
         await db.commit()
 
 async def save_price_snapshot(stock: dict) -> bool:
@@ -710,9 +727,11 @@ async def record_portfolio_transaction(
                 """
                 INSERT INTO portfolio_transactions (
                     telegram_id, symbol, transaction_type,
-                    quantity, price, fees, realized_profit_loss
+                    quantity, price, fees,
+                    broker_commission, sebon_fee, dp_charge,
+                    realized_profit_loss
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     telegram_id,
@@ -721,6 +740,9 @@ async def record_portfolio_transaction(
                     quantity,
                     price,
                     fees,
+                    fee_breakdown["broker_commission"],
+                    fee_breakdown["sebon_fee"],
+                    fee_breakdown["dp_charge"],
                     realized_profit_loss,
                 ),
             )
@@ -756,7 +778,8 @@ async def get_portfolio_transactions(
         async with db.execute(
             """
             SELECT id, symbol, transaction_type, quantity, price,
-                   fees, realized_profit_loss, created_at
+                   fees, broker_commission, sebon_fee, dp_charge,
+                   realized_profit_loss, created_at
             FROM portfolio_transactions
             WHERE telegram_id = ?
             ORDER BY id DESC
