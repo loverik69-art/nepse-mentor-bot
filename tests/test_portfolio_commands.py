@@ -348,3 +348,101 @@ def test_performance_command_compares_previous_snapshot(monkeypatch):
     assert "Change since 2026-11-11" in response
     assert "NPR +500.00 (+10.00%)" in response
     save_snapshot.assert_awaited_once()
+
+
+def test_performance_command_reports_empty_portfolio(monkeypatch):
+    async def fake_get_portfolio(telegram_id):
+        return []
+
+    save_snapshot = AsyncMock()
+
+    monkeypatch.setattr(handlers, "get_portfolio", fake_get_portfolio)
+    monkeypatch.setattr(
+        handlers, "save_portfolio_daily_snapshot", save_snapshot
+    )
+
+    update, context = make_update()
+
+    asyncio.run(handlers.performance_command(update, context))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "Your portfolio is empty" in response
+    save_snapshot.assert_not_awaited()
+
+
+def test_performance_command_handles_unavailable_prices(monkeypatch):
+    async def fake_get_portfolio(telegram_id):
+        return [
+            {"symbol": "NABIL", "quantity": 10, "average_buy_price": 500}
+        ]
+
+    async def fake_get_price_history(symbol, limit=1):
+        return []
+
+    save_snapshot = AsyncMock()
+
+    monkeypatch.setattr(handlers, "get_portfolio", fake_get_portfolio)
+    monkeypatch.setattr(handlers, "get_price_history", fake_get_price_history)
+    monkeypatch.setattr(
+        handlers, "save_portfolio_daily_snapshot", save_snapshot
+    )
+
+    update, context = make_update()
+
+    asyncio.run(handlers.performance_command(update, context))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "No usable historical prices" in response
+    save_snapshot.assert_not_awaited()
+
+
+def test_performance_command_handles_portfolio_database_error(monkeypatch):
+    async def fake_get_portfolio(telegram_id):
+        raise RuntimeError("Database unavailable")
+
+    monkeypatch.setattr(handlers, "get_portfolio", fake_get_portfolio)
+
+    update, context = make_update()
+
+    asyncio.run(handlers.performance_command(update, context))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "Unable to calculate portfolio performance" in response
+
+
+def test_performance_command_handles_snapshot_save_error(monkeypatch):
+    async def fake_get_portfolio(telegram_id):
+        return [
+            {"symbol": "NABIL", "quantity": 10, "average_buy_price": 500}
+        ]
+
+    async def fake_get_price_history(symbol, limit=1):
+        return [{"ltp": 550}]
+
+    async def fake_get_snapshots(telegram_id, limit=30):
+        return []
+
+    save_snapshot = AsyncMock(
+        side_effect=RuntimeError("Snapshot database error")
+    )
+
+    monkeypatch.setattr(handlers, "get_portfolio", fake_get_portfolio)
+    monkeypatch.setattr(handlers, "get_price_history", fake_get_price_history)
+    monkeypatch.setattr(
+        handlers, "get_portfolio_daily_snapshots", fake_get_snapshots
+    )
+    monkeypatch.setattr(
+        handlers, "save_portfolio_daily_snapshot", save_snapshot
+    )
+
+    update, context = make_update()
+
+    asyncio.run(handlers.performance_command(update, context))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "Unable to calculate portfolio performance" in response
+    save_snapshot.assert_awaited_once()
