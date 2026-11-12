@@ -254,6 +254,23 @@ async def add_portfolio_holding(
     average_buy_price: float,
 ) -> None:
     """Add a holding or update an existing holding."""
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ValueError("symbol must be a non-empty string")
+
+    normalized_symbol = symbol.strip().upper()
+
+    for name, value in (
+        ("quantity", quantity),
+        ("average_buy_price", average_buy_price),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"{name} must be a finite positive number")
+
     async with aiosqlite.connect(settings.database_path) as db:
         await db.execute(
             """
@@ -268,7 +285,7 @@ async def add_portfolio_holding(
             """,
             (
                 telegram_id,
-                symbol.strip().upper(),
+                normalized_symbol,
                 quantity,
                 average_buy_price,
             ),

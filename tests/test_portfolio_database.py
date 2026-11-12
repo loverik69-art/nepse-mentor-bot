@@ -148,3 +148,44 @@ def test_remove_holding_does_not_affect_another_user(portfolio_db):
     assert removed is True
     assert len(remaining) == 1
     assert remaining[0]["quantity"] == 20
+
+
+@pytest.mark.parametrize("symbol", ["", "   ", None, 123])
+def test_add_portfolio_holding_rejects_invalid_symbol(
+    portfolio_db,
+    symbol,
+):
+    with pytest.raises(ValueError, match="symbol"):
+        asyncio.run(
+            db.add_portfolio_holding(1001, symbol, 10, 500)
+        )
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    [0, -1, float("nan"), float("inf"), True, "10"],
+)
+def test_add_portfolio_holding_rejects_invalid_quantity(
+    portfolio_db,
+    quantity,
+):
+    with pytest.raises(ValueError, match="quantity"):
+        asyncio.run(
+            db.add_portfolio_holding(1001, "NABIL", quantity, 500)
+        )
+
+
+@pytest.mark.parametrize(
+    "average_buy_price",
+    [0, -1, float("nan"), float("inf"), True, "500"],
+)
+def test_add_portfolio_holding_rejects_invalid_average_buy_price(
+    portfolio_db,
+    average_buy_price,
+):
+    with pytest.raises(ValueError, match="average_buy_price"):
+        asyncio.run(
+            db.add_portfolio_holding(
+                1001, "NABIL", 10, average_buy_price
+            )
+        )
