@@ -565,3 +565,50 @@ def test_fetch_market_data_does_not_save_stale_snapshots(monkeypatch):
     assert stocks[0]["is_stale"] is True
     assert len(saved) == 0
 
+
+
+def test_fetch_market_data_saves_only_fresh_stocks(monkeypatch):
+    now = datetime.now().astimezone()
+
+    stale_stock = SAMPLE.copy()
+    stale_stock["symbol"] = "NICA"
+    stale_stock["last_updated"] = (
+        now - timedelta(hours=25)
+    ).isoformat()
+
+    fresh_stock = SAMPLE.copy()
+    fresh_stock["symbol"] = "NABIL"
+    fresh_stock["last_updated"] = now.isoformat()
+
+    response = FakeResponse(
+        payload=[stale_stock, fresh_stock]
+    )
+
+    def fake_client(*args, **kwargs):
+        return FakeClient(response=response)
+
+    saved = []
+
+    async def fake_save(stock):
+        saved.append(stock)
+        return True
+
+    monkeypatch.setattr(
+        nepse_data.httpx,
+        "AsyncClient",
+        fake_client,
+    )
+    monkeypatch.setattr(
+        nepse_data,
+        "save_price_snapshot",
+        fake_save,
+        raising=False,
+    )
+
+    stocks = asyncio.run(nepse_data.fetch_market_data())
+
+    assert len(stocks) == 2
+    assert stocks[0]["is_stale"] is True
+    assert stocks[1]["is_stale"] is False
+    assert len(saved) == 1
+    assert saved[0]["symbol"] == "NABIL"
