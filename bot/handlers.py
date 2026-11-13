@@ -26,6 +26,7 @@ from database.db import (
 
 from services.technical_analysis import get_technical_analysis
 from services.signals import get_stock_signal
+from services.backtesting import backtest_symbol
 from services.chart_generator import generate_price_chart
 from services.fundamental_data import (
     FundamentalDataError,
@@ -2118,5 +2119,116 @@ async def signal_command(
 
     lines.extend(f"• {reason}" for reason in result["reasons"])
     lines.append(disclaimer)
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def backtest_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Historical research only — not financial advice. "
+        "Past performance does not guarantee future results."
+    )
+
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /backtest SYMBOL\n"
+            "Example: /backtest NABIL"
+            + disclaimer
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Please use a valid symbol, e.g. NABIL."
+            + disclaimer
+        )
+        return
+
+    try:
+        result = await backtest_symbol(symbol)
+
+    except ValueError as exc:
+        await update.message.reply_text(
+            f"⚠️ {exc}" + disclaimer
+        )
+        return
+
+    except Exception:
+        logging.exception(
+            "Failed to backtest historical signals for %s",
+            symbol,
+        )
+        await update.message.reply_text(
+            "⚠️ Unable to run historical backtesting right now."
+            + disclaimer
+        )
+        return
+
+    if result.get("message"):
+        await update.message.reply_text(
+            f"📊 Historical Backtest — {result['symbol']}\n\n"
+            f"Daily observations: {result['observations']}\n"
+            f"⚠️ {result['message']}"
+            + disclaimer
+        )
+        return
+
+    signals = result["signals"]
+
+    lines = [
+        f"📊 Historical Backtest — {result['symbol']}",
+        "",
+        f"Daily observations: {result['observations']}",
+        f"Period: {result['first_date']} to {result['last_date']}",
+        "",
+        "Historical signal counts:",
+        f"🟢 BUY: {signals['BUY']}",
+        f"🔴 SELL: {signals['SELL']}",
+        f"🟡 HOLD: {signals['HOLD']}",
+        "",
+        "Forward performance:",
+    ]
+
+    for horizon, summary in result["results"].items():
+        win_rate = summary["win_rate_pct"]
+        average_return = summary["average_return_pct"]
+
+        win_text = (
+            f"{win_rate:.2f}%"
+            if win_rate is not None
+            else "N/A"
+        )
+        average_text = (
+            f"{average_return:+.2f}%"
+            if average_return is not None
+            else "N/A"
+        )
+
+        lines.extend([
+            "",
+            f"📅 {horizon}-observation horizon",
+            f"Completed trades: {summary['trades']}",
+            f"BUY trades: {summary['buy_trades']}",
+            f"SELL trades: {summary['sell_trades']}",
+            f"Wins / Losses: {summary['wins']} / {summary['losses']}",
+            f"Win rate: {win_text}",
+            f"Average directional return: {average_text}",
+        ])
+
+    lines.extend([
+        "",
+        "Methodology:",
+        "• Entry: Next available daily observation after signal.",
+        "• Exit: After the selected number of additional observations.",
+        "• Fees and slippage: Excluded.",
+        "• Prices: Historical daily LTP snapshots, not verified official closes.",
+        "• Signals use only data available on their signal dates.",
+        disclaimer,
+    ])
 
     await update.message.reply_text("\n".join(lines))
