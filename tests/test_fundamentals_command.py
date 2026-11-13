@@ -239,3 +239,98 @@ def test_fundamentals_handle_service_error(monkeypatch):
 
     response = update.message.reply_text.await_args.args[0]
     assert "temporarily unavailable" in response
+
+
+def test_fundamentals_display_year_over_year_comparisons(monkeypatch):
+    async def fake_financials(symbol):
+        current = sample_report("First Quarter", 30.0)
+        current["fy"] = "2026-2027"
+        current["profit"] = 2000000.0
+        current["net_worth_per_share"] = 160.0
+
+        previous = sample_report("First Quarter", 25.0)
+        previous["fy"] = "2025-2026"
+        previous["profit"] = 1000000.0
+        previous["net_worth_per_share"] = 150.0
+
+        return {
+            "id": 1,
+            "symbol": symbol,
+            "reports": [current, previous],
+        }
+
+    monkeypatch.setattr(
+        handlers, "get_company_financials", fake_financials
+    )
+
+    update = make_update()
+    context = SimpleNamespace(args=["NABIL"])
+
+    asyncio.run(
+        handlers.fundamentals_command(update, context)
+    )
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "YEAR-OVER-YEAR COMPARISON" in response
+    assert "EPS: 30.00 vs 25.00 (+20.00%)" in response
+    assert "Net worth per share: 160.00 vs 150.00 (+6.67%)" in response
+    assert "Profit growth is not calculated" not in response
+    assert "growth not calculated" in response
+
+
+def test_fundamentals_do_not_claim_profit_growth(monkeypatch):
+    async def fake_financials(symbol):
+        current = sample_report("First Quarter", 30.0)
+        current["fy"] = "2026-2027"
+        previous = sample_report("First Quarter", 25.0)
+        previous["fy"] = "2025-2026"
+
+        return {
+            "id": 1,
+            "symbol": symbol,
+            "reports": [current, previous],
+        }
+
+    monkeypatch.setattr(
+        handlers, "get_company_financials", fake_financials
+    )
+
+    update = make_update()
+    context = SimpleNamespace(args=["NABIL"])
+
+    asyncio.run(
+        handlers.fundamentals_command(update, context)
+    )
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "Profit: 1,000,000.00" in response
+    assert "growth not calculated" in response
+    assert "Profit: 1,000,000.00 vs 1,000,000.00 (+0.00%)" not in response
+
+
+def test_fundamentals_explain_insufficient_comparison_history(monkeypatch):
+    async def fake_financials(symbol):
+        return {
+            "id": 1,
+            "symbol": symbol,
+            "reports": [sample_report("First Quarter", 25.0)],
+        }
+
+    monkeypatch.setattr(
+        handlers, "get_company_financials", fake_financials
+    )
+
+    update = make_update()
+    context = SimpleNamespace(args=["NABIL"])
+
+    asyncio.run(
+        handlers.fundamentals_command(update, context)
+    )
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "YEAR-OVER-YEAR COMPARISON" in response
+    assert "EPS: Insufficient comparable history." in response
+    assert "Net worth per share: Insufficient comparable history." in response

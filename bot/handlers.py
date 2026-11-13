@@ -30,6 +30,7 @@ from services.fundamental_data import (
     FundamentalDataError,
     get_company_financials,
 )
+from services.fundamental_analysis import analyze_company_reports
 
 
 EXPERIENCE, STYLE, CAPITAL, RISK, MAX_RISK = range(5)
@@ -1060,6 +1061,67 @@ async def fundamentals_command(
             submitted = document.get("submitted_date", "date unavailable")
             if url:
                 lines.append(f"📄 Document ({submitted}): {url}")
+
+    report_analysis = analyze_company_reports(company)
+    latest_comparison_report = report_analysis["latest_report"]
+
+    lines.extend([
+        "",
+        "📈 YEAR-OVER-YEAR COMPARISON",
+    ])
+
+    if latest_comparison_report is None:
+        lines.append("No verified reports available for comparison.")
+    else:
+        comparison_period = latest_comparison_report.get(
+            "fy", "Unknown fiscal year"
+        )
+        comparison_quarter = latest_comparison_report.get("quarter")
+
+        if comparison_quarter:
+            comparison_period += f" — {comparison_quarter}"
+
+        lines.append(f"Latest verified period: {comparison_period}")
+
+        comparison_labels = {
+            "eps": "EPS",
+            "profit": "Profit",
+            "net_worth_per_share": "Net worth per share",
+        }
+
+        for field, label in comparison_labels.items():
+            comparison = report_analysis["comparisons"][field]
+            status = comparison["status"]
+
+            if status == "insufficient_data":
+                lines.append(
+                    f"{label}: Insufficient comparable history."
+                )
+            elif status == "missing_values":
+                lines.append(
+                    f"{label}: Current or previous value not reported."
+                )
+            elif status == "ambiguous_period":
+                lines.append(
+                    f"{label}: Ambiguous reporting period; comparison withheld."
+                )
+            elif status == "comparison_unverified":
+                lines.append(
+                    f"{label}: {format_value(comparison['current'])} vs "
+                    f"{format_value(comparison['previous'])} "
+                    "(growth not calculated; quarterly figures may be cumulative)."
+                )
+            elif status == "compared":
+                change = comparison["change_percent"]
+                lines.append(
+                    f"{label}: {format_value(comparison['current'])} vs "
+                    f"{format_value(comparison['previous'])} "
+                    f"({change:+.2f}%)."
+                )
+            else:
+                lines.append(
+                    f"{label}: Percentage change is not meaningful."
+                )
 
     lines.append(
         "\nFigures are displayed as reported by the source; "
