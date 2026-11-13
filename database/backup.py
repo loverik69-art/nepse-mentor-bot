@@ -24,8 +24,8 @@ def create_database_backup(
     backup_path = backup_dir / f"nepse-{timestamp}.db"
 
     try:
-        with sqlite3.connect(source_path) as source:
-            with sqlite3.connect(backup_path) as destination:
+        with sqlite3.connect(source_path, timeout=30) as source:
+            with sqlite3.connect(backup_path, timeout=30) as destination:
                 source.backup(destination)
 
                 result = destination.execute(
@@ -69,7 +69,7 @@ def restore_database_backup(
 
     backup_uri = backup_path.resolve().as_uri() + "?mode=ro"
 
-    with sqlite3.connect(backup_uri, uri=True) as source:
+    with sqlite3.connect(backup_uri, uri=True, timeout=30) as source:
         result = source.execute(
             "PRAGMA integrity_check"
         ).fetchone()
@@ -92,7 +92,7 @@ def restore_database_backup(
         temporary_path = Path(temporary_name)
 
         try:
-            with sqlite3.connect(temporary_path) as destination:
+            with sqlite3.connect(temporary_path, timeout=30) as destination:
                 source.backup(destination)
 
                 result = destination.execute(
