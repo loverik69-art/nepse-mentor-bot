@@ -178,3 +178,157 @@ def analyze_fundamentals(
             market_price,
         ),
     }
+
+
+def _report_period_key(report):
+    """Return the comparable reporting period."""
+    return (
+        report.get("type"),
+        report.get("fy"),
+        report.get("quarter"),
+    )
+
+
+def _quarter_order(report):
+    """Sort quarters chronologically within a fiscal year."""
+    return {
+        "First Quarter": 1,
+        "Second Quarter": 2,
+        "Third Quarter": 3,
+        "Fourth Quarter": 4,
+        None: 5,
+    }.get(report.get("quarter"), 0)
+
+
+def _percentage_change(current, previous):
+    """Calculate percentage change when the baseline is positive."""
+    if current is None or previous is None or previous <= 0:
+        return None
+
+    return ((current - previous) / previous) * 100
+
+
+def analyze_company_reports(company):
+    """Analyze comparable source-reported company financial reports.
+
+    Conflicting reports are excluded. Quarterly profit is not assumed
+    to be standalone, and EPS is not annualized.
+    """
+    if not isinstance(company, dict):
+        raise ValueError("Company data must be a dictionary")
+
+    symbol = company.get("symbol")
+    reports = company.get("reports")
+
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ValueError("Company symbol is required")
+
+    if not isinstance(reports, list):
+        raise ValueError("Company reports must be a list")
+
+    valid_reports = [
+        report for report in reports
+        if isinstance(report, dict)
+        and report.get("status") != "ambiguous"
+    ]
+
+    valid_reports.sort(
+        key=lambda report: (
+            report.get("fy", ""),
+            _quarter_order(report),
+            report.get("type", ""),
+        ),
+        reverse=True,
+    )
+
+    latest = valid_reports[0] if valid_reports else None
+
+    comparisons = {}
+
+    for field in ("eps", "profit", "net_worth_per_share"):
+        comparisons[field] = {
+            "current": None if latest is None else latest.get(field),
+            "previous": None,
+            "change_percent": None,
+            "period": None if latest is None else _report_period_key(latest),
+            "status": "insufficient_data",
+        }
+
+        if latest is None:
+            continue
+
+        matching = [
+            report for report in valid_reports
+            if _report_period_key(report) == _report_period_key(latest)
+            and report is not latest
+        ]
+
+        # Deduplicated datasets should have one report per period.
+        # Do not guess a comparison when duplicate candidates remain.
+        if matching:
+            comparisons[field]["status"] = "ambiguous_period"
+            continue
+
+        previous_year_reports = [
+            report for report in valid_reports
+            if report.get("type") == latest.get("type")
+            and report.get("quarter") == latest.get("quarter")
+            and report.get("fy") != latest.get("fy")
+        ]
+
+        if not previous_year_reports:
+            continue
+
+        previous_year_reports.sort(
+            key=lambda report: report.get("fy", ""),
+            reverse=True,
+        )
+        previous = previous_year_reports[0]
+
+        current_value = latest.get(field)
+        previous_value = previous.get(field)
+
+        comparisons[field]["previous"] = previous_value
+
+        if current_value is None or previous_value is None:
+            comparisons[field]["status"] = "missing_values"
+            continue
+
+        if field == "profit":
+            comparisons[field]["previous_period"] = _report_period_key(
+                previous
+            )
+            comparisons[field]["status"] = "comparison_unverified"
+            continue
+
+        comparisons[field]["change_percent"] = _percentage_change(
+            current_value,
+            previous_value,
+        )
+        comparisons[field]["previous_period"] = _report_period_key(
+            previous
+        )
+        comparisons[field]["status"] = (
+            "compared"
+            if comparisons[field]["change_percent"] is not None
+            else "not_comparable"
+        )
+
+    return {
+        "symbol": symbol.strip().upper(),
+        "latest_report": latest,
+        "comparisons": comparisons,
+        "reports_analyzed": len(valid_reports),
+        "ambiguous_reports_excluded": (
+            len(reports) - len(valid_reports)
+        ),
+        "warnings": [
+            "EPS and profit are source-reported figures; "
+            "their accounting basis and units are not independently verified.",
+            "Profit is shown as source-reported; profit growth is not "
+            "calculated because quarterly figures may be cumulative.",
+            "EPS is not annualized.",
+            "Comparisons use the same report type and quarter across "
+            "different fiscal years.",
+        ],
+    }
