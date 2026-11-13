@@ -423,3 +423,85 @@ def test_save_portfolio_daily_snapshot_rejects_invalid_holdings_count(
 
     with pytest.raises(ValueError, match="holdings_count"):
         asyncio.run(run_test())
+
+
+def test_get_daily_price_history_returns_latest_daily_snapshots_oldest_first(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "test_nepse.db"
+    monkeypatch.setattr(
+        db,
+        "settings",
+        SimpleNamespace(database_path=str(database_path)),
+    )
+
+    async def run_test():
+        await db.init_db()
+        snapshots = [
+            ("2026-11-09T12:00:00+05:45", 530.0),
+            ("2026-11-09T15:00:00+05:45", 540.0),
+            ("2026-11-10T15:00:00+05:45", 549.0),
+        ]
+        for timestamp, price in snapshots:
+            await db.save_price_snapshot({
+                "symbol": "NABIL",
+                "ltp": price,
+                "volume": 1000,
+                "turnover": price * 1000,
+                "last_updated": timestamp,
+                "source": "test",
+            })
+        return await db.get_daily_price_history(" nabil ")
+
+    history = asyncio.run(run_test())
+
+    assert history == [
+        {"trading_date": "2026-11-09", "ltp": 540.0},
+        {"trading_date": "2026-11-10", "ltp": 549.0},
+    ]
+
+
+def test_get_daily_price_history_respects_limit(tmp_path, monkeypatch):
+    database_path = tmp_path / "test_nepse.db"
+    monkeypatch.setattr(
+        db,
+        "settings",
+        SimpleNamespace(database_path=str(database_path)),
+    )
+
+    async def run_test():
+        await db.init_db()
+        for date, price in [
+            ("2026-11-08T15:00:00+05:45", 520.0),
+            ("2026-11-09T15:00:00+05:45", 530.0),
+            ("2026-11-10T15:00:00+05:45", 540.0),
+        ]:
+            await db.save_price_snapshot({
+                "symbol": "NABIL",
+                "ltp": price,
+                "volume": 1000,
+                "turnover": price * 1000,
+                "last_updated": date,
+                "source": "test",
+            })
+        return await db.get_daily_price_history("NABIL", limit=2)
+
+    history = asyncio.run(run_test())
+
+    assert history == [
+        {"trading_date": "2026-11-09", "ltp": 530.0},
+        {"trading_date": "2026-11-10", "ltp": 540.0},
+    ]
+
+
+@pytest.mark.parametrize("symbol", ["", "   ", None])
+def test_get_daily_price_history_rejects_invalid_symbol(symbol):
+    with pytest.raises(ValueError, match="symbol"):
+        asyncio.run(db.get_daily_price_history(symbol))
+
+
+@pytest.mark.parametrize("limit", [0, -1, 1.5, True, "10"])
+def test_get_daily_price_history_rejects_invalid_limit(limit):
+    with pytest.raises(ValueError, match="limit"):
+        asyncio.run(db.get_daily_price_history("NABIL", limit=limit))

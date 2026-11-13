@@ -280,6 +280,45 @@ async def get_indicator_prices(
 
 
 
+async def get_daily_price_history(
+    symbol: str,
+    limit: int = 5000,
+) -> list[dict]:
+    """Return dated latest daily snapshots, oldest first."""
+    if not isinstance(symbol, str) or not symbol.strip():
+        raise ValueError("symbol must be a non-empty string")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError("limit must be a positive integer")
+
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
+        async with db.execute(
+            """
+            SELECT trading_date, ltp
+            FROM (
+                SELECT
+                    DATE(source_updated_at) AS trading_date,
+                    ltp,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY DATE(source_updated_at)
+                        ORDER BY source_updated_at DESC, id DESC
+                    ) AS row_number
+                FROM stock_price_history
+                WHERE symbol = ?
+            )
+            WHERE row_number = 1
+            ORDER BY trading_date DESC
+            LIMIT ?
+            """,
+            (symbol.strip().upper(), limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    return [
+        {"trading_date": row[0], "ltp": row[1]}
+        for row in reversed(rows)
+    ]
+
+
 async def add_portfolio_holding(
     telegram_id: int,
     symbol: str,
