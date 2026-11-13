@@ -2,7 +2,23 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 import bot.handlers as handlers
+
+
+@pytest.fixture(autouse=True)
+def mock_market_price(monkeypatch):
+    async def fake_get_stock(symbol):
+        return {
+            "symbol": symbol,
+            "ltp": 500.0,
+            "last_updated": "2026-11-13T15:00:00+05:45",
+            "age_minutes": 10,
+            "is_stale": False,
+        }
+
+    monkeypatch.setattr(handlers, "get_stock", fake_get_stock)
 
 
 def make_update():
@@ -334,3 +350,95 @@ def test_fundamentals_explain_insufficient_comparison_history(monkeypatch):
     assert "YEAR-OVER-YEAR COMPARISON" in response
     assert "EPS: Insufficient comparable history." in response
     assert "Net worth per share: Insufficient comparable history." in response
+
+
+def test_fundamentals_calculate_indicative_pb_with_fresh_price(monkeypatch):
+    update = make_update()
+    context = SimpleNamespace(args=["NABIL"])
+
+    async def fake_financials(symbol):
+        return {
+            "id": 1,
+            "symbol": symbol,
+            "reports": [sample_report("First Quarter", 30.0)],
+        }
+
+    async def fake_stock(symbol):
+        return {
+            "symbol": symbol,
+            "ltp": 500.0,
+            "last_updated": "2026-11-13T15:00:00+05:45",
+            "is_stale": False,
+        }
+
+    monkeypatch.setattr(handlers, 'get_company_financials', fake_financials)
+    monkeypatch.setattr(handlers, 'get_stock', fake_stock)
+
+    asyncio.run(handlers.fundamentals_command(update, context))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "VALUATION METRICS" in response
+    assert "Source-reported P/E: 12.50" in response
+    assert "Indicative P/B: 3.33x" in response
+
+
+def test_fundamentals_withhold_pb_for_stale_market_price(monkeypatch):
+    async def fake_financials(symbol):
+        return {
+            "id": 1,
+            "symbol": symbol,
+            "reports": [sample_report("First Quarter", 30.0)],
+        }
+
+    async def fake_stock(symbol):
+        return {
+            "symbol": symbol,
+            "ltp": 500.0,
+            "last_updated": "2026-11-06T15:00:00+05:45",
+            "is_stale": True,
+        }
+
+    monkeypatch.setattr(
+        handlers, "get_company_financials", fake_financials
+    )
+    monkeypatch.setattr(handlers, "get_stock", fake_stock)
+
+    update = make_update()
+    context = SimpleNamespace(args=["NABIL"])
+
+    asyncio.run(handlers.fundamentals_command(update, context))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "STALE" in response
+    assert "Indicative P/B withheld" in response
+    assert "Indicative P/B: 3.33x" not in response
+
+
+def test_fundamentals_handle_unavailable_market_price(monkeypatch):
+    async def fake_financials(symbol):
+        return {
+            "id": 1,
+            "symbol": symbol,
+            "reports": [sample_report("First Quarter", 30.0)],
+        }
+
+    async def fake_stock(symbol):
+        return None
+
+    monkeypatch.setattr(
+        handlers, "get_company_financials", fake_financials
+    )
+    monkeypatch.setattr(handlers, "get_stock", fake_stock)
+
+    update = make_update()
+    context = SimpleNamespace(args=["NABIL"])
+
+    asyncio.run(handlers.fundamentals_command(update, context))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "FUNDAMENTAL REPORTS" in response
+    assert "Market price unavailable" in response
+    assert "indicative P/B not calculated" in response

@@ -30,7 +30,10 @@ from services.fundamental_data import (
     FundamentalDataError,
     get_company_financials,
 )
-from services.fundamental_analysis import analyze_company_reports
+from services.fundamental_analysis import (
+    analyze_company_reports,
+    calculate_pb_ratio,
+)
 
 
 EXPERIENCE, STYLE, CAPITAL, RISK, MAX_RISK = range(5)
@@ -1122,6 +1125,95 @@ async def fundamentals_command(
                 lines.append(
                     f"{label}: Percentage change is not meaningful."
                 )
+
+    lines.extend([
+        "",
+        "💰 VALUATION METRICS",
+    ])
+
+    if (
+        latest_comparison_report is None
+        or latest_comparison_report.get("status") != "verified"
+    ):
+        lines.append("Valuation withheld: no latest verified financial report.")
+    else:
+        latest_pe = latest_comparison_report.get("pe")
+        lines.append(
+            f"Source-reported P/E: {format_value(latest_pe)}"
+        )
+
+        try:
+            stock = await get_stock(symbol)
+
+            if stock is None:
+                lines.append(
+                    "Market price unavailable; indicative P/B not calculated."
+                )
+            else:
+                market_price = stock.get("ltp")
+                price_timestamp = stock.get(
+                    "last_updated", "timestamp unavailable"
+                )
+
+                if stock.get("is_stale"):
+                    lines.append(
+                        f"Last recorded LTP: {format_value(market_price)} "
+                        f"(STALE — {price_timestamp})."
+                    )
+                    lines.append(
+                        "Indicative P/B withheld because market data is stale."
+                    )
+                elif market_price is None:
+                    lines.append(
+                        "Market price unavailable; indicative P/B not calculated."
+                    )
+                else:
+                    lines.append(
+                        f"Market LTP: NPR {format_value(market_price)} "
+                        f"({price_timestamp})."
+                    )
+
+                    book_value = latest_comparison_report.get(
+                        "net_worth_per_share"
+                    )
+                    pb_ratio = calculate_pb_ratio(
+                        market_price,
+                        book_value,
+                    )
+
+                    if pb_ratio is None:
+                        lines.append(
+                            "Indicative P/B unavailable: positive net worth "
+                            "per share was not reported."
+                        )
+                    else:
+                        lines.append(
+                            f"Indicative P/B: {pb_ratio:.2f}x "
+                            "(LTP ÷ reported net worth per share)."
+                        )
+
+        except MarketDataError:
+            logging.exception(
+                "Unable to retrieve market price for valuation of %s",
+                symbol,
+            )
+            lines.append(
+                "Market data unavailable; indicative P/B not calculated."
+            )
+        except Exception:
+            logging.exception(
+                "Unexpected valuation error for %s",
+                symbol,
+            )
+            lines.append(
+                "Valuation could not be completed because market data "
+                "could not be processed."
+            )
+
+    lines.append(
+        "P/B is indicative only; reported net worth per share may not "
+        "match independently verified book value per share."
+    )
 
     lines.append(
         "\nFigures are displayed as reported by the source; "
