@@ -25,6 +25,7 @@ from database.db import (
 )
 
 from services.technical_analysis import get_technical_analysis
+from services.signals import get_stock_signal
 from services.chart_generator import generate_price_chart
 from services.fundamental_data import (
     FundamentalDataError,
@@ -2036,3 +2037,86 @@ async def transactions_command(
 
     for message in messages:
         await update.message.reply_text(message)
+
+
+async def signal_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Based on latest market data and historical daily "
+        "snapshots, not verified official closing prices. "
+        "Educational research only — not financial advice. "
+        "Signals are not guaranteed predictions."
+    )
+
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /signal SYMBOL\n"
+            "Example: /signal NABIL"
+            + disclaimer
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Please use a valid symbol, e.g. NABIL."
+            + disclaimer
+        )
+        return
+
+    try:
+        result = await get_stock_signal(symbol)
+
+    except ValueError as exc:
+        await update.message.reply_text(
+            f"⚠️ {exc}" + disclaimer
+        )
+        return
+
+    except Exception:
+        logging.exception(
+            "Failed to generate trading signal for %s",
+            symbol,
+        )
+        await update.message.reply_text(
+            "⚠️ Unable to generate a trading signal right now."
+            + disclaimer
+        )
+        return
+
+    signal = result["signal"]
+    score = result["score"]
+    score_text = f"{score:+d}/4"
+
+    if signal == "BUY":
+        heading = "🟢 BUY"
+    elif signal == "SELL":
+        heading = "🔴 SELL"
+    elif signal == "HOLD":
+        heading = "🟡 HOLD"
+    elif signal == "STALE_DATA":
+        heading = "⚠️ STALE DATA — NO ACTIONABLE SIGNAL"
+    else:
+        heading = "⚠️ INSUFFICIENT DATA — NO ACTIONABLE SIGNAL"
+
+    lines = [
+        f"📊 Trading Signal — {result['symbol']}",
+        "",
+        f"Signal: {heading}",
+        f"Score: {score_text}",
+        f"Strength: {result['strength']}",
+        f"LTP snapshot: NPR {result['ltp']:.2f}",
+        f"Data age: {result['age_minutes']:.0f} minutes",
+        f"Last updated: {result['last_updated']}",
+        f"Daily observations: {result['observations']}",
+        "",
+        "Analysis:",
+    ]
+
+    lines.extend(f"• {reason}" for reason in result["reasons"])
+    lines.append(disclaimer)
+
+    await update.message.reply_text("\n".join(lines))
