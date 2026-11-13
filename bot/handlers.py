@@ -26,6 +26,10 @@ from database.db import (
 
 from services.technical_analysis import get_technical_analysis
 from services.chart_generator import generate_price_chart
+from services.fundamental_data import (
+    FundamentalDataError,
+    get_company_financials,
+)
 
 
 EXPERIENCE, STYLE, CAPITAL, RISK, MAX_RISK = range(5)
@@ -136,7 +140,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/gainers — top gaining stocks\n"
         "/losers — top losing stocks\n"
         "/chart SYMBOL [LIMIT] — technical chart\n"
-        "/compare SYMBOL1 SYMBOL2 — compare stocks\n\n"
+        "/compare SYMBOL1 SYMBOL2 — compare stocks\n"
+        "/fundamentals SYMBOL — financial reports and ratios\n\n"
         "💼 PORTFOLIO\n"
         "/addstock — add a portfolio holding\n"
         "/buy SYMBOL QUANTITY PRICE — record a purchase\n"
@@ -922,6 +927,150 @@ async def compare_command(
         f"{summary}"
         + disclaimer
     )
+
+    await update.message.reply_text(message)
+
+
+
+
+async def fundamentals_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Source-reported financial information. "
+        "Educational research only — not financial advice."
+    )
+
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /fundamentals SYMBOL\n"
+            "Example: /fundamentals NABIL"
+            + disclaimer
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol or not all(c.isalnum() or c == "/" for c in symbol):
+        await update.message.reply_text(
+            "Invalid stock symbol. Use a symbol such as NABIL or NICA."
+            + disclaimer
+        )
+        return
+
+    try:
+        company = await get_company_financials(symbol)
+    except FundamentalDataError:
+        logging.exception(
+            "Unable to retrieve fundamental data for %s",
+            symbol,
+        )
+        await update.message.reply_text(
+            "⚠️ Fundamental financial data is temporarily unavailable. "
+            "Please try again later."
+            + disclaimer
+        )
+        return
+    except Exception:
+        logging.exception(
+            "Unexpected fundamental-data error for %s",
+            symbol,
+        )
+        await update.message.reply_text(
+            "⚠️ Unable to retrieve financial information right now."
+            + disclaimer
+        )
+        return
+
+    if company is None:
+        await update.message.reply_text(
+            f"No fundamental financial data found for {symbol}."
+            + disclaimer
+        )
+        return
+
+    reports = company.get("reports", [])
+
+    if not reports:
+        await update.message.reply_text(
+            f"No financial reports are available for {symbol}."
+            + disclaimer
+        )
+        return
+
+    quarter_order = {
+        "Fourth Quarter": 4,
+        "Third Quarter": 3,
+        "Second Quarter": 2,
+        "First Quarter": 1,
+        None: 0,
+    }
+
+    reports = sorted(
+        reports,
+        key=lambda report: (
+            report.get("fy", ""),
+            quarter_order.get(report.get("quarter"), -1),
+            report.get("type", ""),
+        ),
+        reverse=True,
+    )[:5]
+
+    def format_value(value):
+        if value is None:
+            return "Not reported"
+        return f"{value:,.2f}"
+
+    lines = [
+        f"📑 FUNDAMENTAL REPORTS — {symbol}",
+        "",
+        f"Available reports: {len(company.get('reports', []))}",
+        "Latest 5 reports:",
+    ]
+
+    for report in reports:
+        period = report.get("fy", "Unknown fiscal year")
+        quarter = report.get("quarter")
+
+        if quarter:
+            period += f" — {quarter}"
+
+        lines.extend([
+            "",
+            f"{report.get('type', 'Financial Report')} | {period}",
+        ])
+
+        if report.get("status") == "ambiguous":
+            lines.append(
+                "⚠️ Conflicting source records — figures are unverified."
+            )
+
+        lines.extend([
+            f"P/E: {format_value(report.get('pe'))}",
+            f"EPS: {format_value(report.get('eps'))}",
+            f"Profit: {format_value(report.get('profit'))}",
+            f"Paid-up capital: {format_value(report.get('paid_up_capital'))}",
+            f"Net worth per share: {format_value(report.get('net_worth_per_share'))}",
+        ])
+
+        documents = report.get("documents", [])
+        for document in documents[:2]:
+            url = document.get("url")
+            submitted = document.get("submitted_date", "date unavailable")
+            if url:
+                lines.append(f"📄 Document ({submitted}): {url}")
+
+    lines.append(
+        "\nFigures are displayed as reported by the source; "
+        "units and accounting definitions are not independently verified."
+    )
+    lines.append(disclaimer.strip())
+
+    message = "\n".join(lines)
+
+    if len(message) > 4000:
+        message = message[:3950] + "\n\nOutput shortened."
 
     await update.message.reply_text(message)
 
