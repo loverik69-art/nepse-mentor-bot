@@ -22,6 +22,9 @@ from database.db import (
     add_stock_price_alert,
     get_stock_price_alerts,
     remove_stock_price_alert,
+    add_watchlist_stock,
+    get_watchlist,
+    remove_watchlist_stock,
 )
 
 from services.technical_analysis import get_technical_analysis
@@ -151,6 +154,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "🎯 TRADING SIGNALS & BACKTESTING\n"
         "/signal SYMBOL — current technical trading signal\n"
         "/backtest SYMBOL — historical signal performance\n\n"
+        "👀 WATCHLIST\n"
+        "/watchadd SYMBOL — add a stock to your watchlist\n"
+        "/watchlist — view your watchlist\n"
+        "/watchremove SYMBOL — remove a stock from your watchlist\n\n"
         "💼 PORTFOLIO\n"
         "/addstock — add a portfolio holding\n"
         "/buy SYMBOL QUANTITY PRICE — record a purchase\n"
@@ -1232,6 +1239,113 @@ async def fundamentals_command(
         message = message[:3950] + "\n\nOutput shortened."
 
     await update.message.reply_text(message)
+
+
+async def watchadd_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /watchadd SYMBOL\n"
+            "Example: /watchadd NABIL"
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+    if not symbol.isalnum():
+        await update.message.reply_text("Invalid stock symbol.")
+        return
+
+    try:
+        added = await add_watchlist_stock(
+            update.effective_user.id,
+            symbol,
+        )
+    except Exception:
+        logging.exception("Failed to add stock to watchlist")
+        await update.message.reply_text(
+            "Unable to update your watchlist right now."
+        )
+        return
+
+    if added:
+        await update.message.reply_text(
+            f"✅ {symbol} added to your watchlist.\n"
+            "This does not add it to your portfolio."
+        )
+    else:
+        await update.message.reply_text(
+            f"{symbol} is already in your watchlist."
+        )
+
+
+async def watchlist_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    try:
+        stocks = await get_watchlist(update.effective_user.id)
+    except Exception:
+        logging.exception("Failed to retrieve watchlist")
+        await update.message.reply_text(
+            "Unable to retrieve your watchlist right now."
+        )
+        return
+
+    if not stocks:
+        await update.message.reply_text(
+            "Your watchlist is empty.\n\n"
+            "Add a stock using /watchadd SYMBOL"
+        )
+        return
+
+    lines = ["👀 YOUR NEPSE WATCHLIST\n"]
+    lines.extend(
+        f"{index}. {stock['symbol']}"
+        for index, stock in enumerate(stocks, start=1)
+    )
+    lines.append("\nRemove a stock using /watchremove SYMBOL")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def watchremove_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /watchremove SYMBOL\n"
+            "Example: /watchremove NABIL"
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+    if not symbol.isalnum():
+        await update.message.reply_text("Invalid stock symbol.")
+        return
+
+    try:
+        removed = await remove_watchlist_stock(
+            update.effective_user.id,
+            symbol,
+        )
+    except Exception:
+        logging.exception("Failed to remove stock from watchlist")
+        await update.message.reply_text(
+            "Unable to update your watchlist right now."
+        )
+        return
+
+    if removed:
+        await update.message.reply_text(
+            f"✅ {symbol} removed from your watchlist."
+        )
+    else:
+        await update.message.reply_text(
+            f"{symbol} was not found in your watchlist."
+        )
 
 
 async def addstock_command(

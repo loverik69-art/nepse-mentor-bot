@@ -16,6 +16,17 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS user_watchlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL CHECK(telegram_id > 0),
+    symbol TEXT NOT NULL CHECK(length(symbol) > 0),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(telegram_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_watchlist_user_id
+ON user_watchlist(telegram_id, symbol);
+
 CREATE TABLE IF NOT EXISTS portfolio_daily_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER NOT NULL,
@@ -317,6 +328,94 @@ async def get_daily_price_history(
         {"trading_date": row[0], "ltp": row[1]}
         for row in reversed(rows)
     ]
+
+
+async def add_watchlist_stock(
+    telegram_id: int,
+    symbol: str,
+) -> bool:
+    """Add a stock to a user's watchlist. Return False if already present."""
+    if (
+        isinstance(telegram_id, bool)
+        or not isinstance(telegram_id, int)
+        or telegram_id <= 0
+    ):
+        raise ValueError("Telegram ID must be a positive integer.")
+
+    if (
+        not isinstance(symbol, str)
+        or not symbol.strip()
+        or not symbol.strip().isalnum()
+    ):
+        raise ValueError("Invalid stock symbol.")
+
+    normalized_symbol = symbol.strip().upper()
+
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
+        cursor = await db.execute(
+            """
+            INSERT OR IGNORE INTO user_watchlist (telegram_id, symbol)
+            VALUES (?, ?)
+            """,
+            (telegram_id, normalized_symbol),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_watchlist(telegram_id: int) -> list[dict]:
+    """Return the stocks in one user's watchlist."""
+    if (
+        isinstance(telegram_id, bool)
+        or not isinstance(telegram_id, int)
+        or telegram_id <= 0
+    ):
+        raise ValueError("Telegram ID must be a positive integer.")
+
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT symbol, created_at
+            FROM user_watchlist
+            WHERE telegram_id = ?
+            ORDER BY symbol
+            """,
+            (telegram_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def remove_watchlist_stock(
+    telegram_id: int,
+    symbol: str,
+) -> bool:
+    """Remove one stock from one user's watchlist."""
+    if (
+        isinstance(telegram_id, bool)
+        or not isinstance(telegram_id, int)
+        or telegram_id <= 0
+    ):
+        raise ValueError("Telegram ID must be a positive integer.")
+
+    if (
+        not isinstance(symbol, str)
+        or not symbol.strip()
+        or not symbol.strip().isalnum()
+    ):
+        raise ValueError("Invalid stock symbol.")
+
+    async with aiosqlite.connect(settings.database_path, timeout=30) as db:
+        cursor = await db.execute(
+            """
+            DELETE FROM user_watchlist
+            WHERE telegram_id = ? AND symbol = ?
+            """,
+            (telegram_id, symbol.strip().upper()),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def add_portfolio_holding(
