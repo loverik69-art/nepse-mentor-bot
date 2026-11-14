@@ -2447,41 +2447,62 @@ async def backtest_command(
         f"🔴 SELL: {signals['SELL']}",
         f"🟡 HOLD: {signals['HOLD']}",
         "",
-        "Forward performance:",
+        "COST-ADJUSTED BUY EXECUTION",
     ]
 
     for horizon, summary in result["results"].items():
-        win_rate = summary["win_rate_pct"]
-        average_return = summary["average_return_pct"]
-
-        win_text = (
-            f"{win_rate:.2f}%"
-            if win_rate is not None
-            else "N/A"
-        )
-        average_text = (
-            f"{average_return:+.2f}%"
-            if average_return is not None
-            else "N/A"
-        )
+        buy = summary["buy_execution"]
+        sell = summary["sell_signal"]
 
         lines.extend([
             "",
             f"📅 {horizon}-observation horizon",
-            f"Completed trades: {summary['trades']}",
-            f"BUY trades: {summary['buy_trades']}",
-            f"SELL trades: {summary['sell_trades']}",
-            f"Wins / Losses: {summary['wins']} / {summary['losses']}",
-            f"Win rate: {win_text}",
-            f"Average directional return: {average_text}",
+            "🟢 BUY simulation (long-only):",
+            f"Completed trades: {buy['trades']}",
+            f"Skipped (budget insufficient): {buy.get('skipped_budget', 0)}",
+            f"Wins / Losses: {buy['wins']} / {buy['losses']}",
+            f"Net win rate: {buy['win_rate_pct']:.2f}%"
+            if buy["win_rate_pct"] is not None
+            else "Net win rate: N/A",
+            f"Average net return: {buy['average_return_pct']:+.2f}%"
+            if buy["average_return_pct"] is not None
+            else "Average net return: N/A",
+            f"Average gross return: {buy['average_gross_return_pct']:+.2f}%"
+            if buy["average_gross_return_pct"] is not None
+            else "Average gross return: N/A",
+            f"Total net profit: NPR {buy['total_net_profit']:.2f}",
+            f"Total fees: NPR {buy['total_fees']:.2f}",
+            f"Estimated slippage: NPR {buy['total_slippage_cost']:.2f}",
+            "",
+            "🔴 SELL signal diagnostic (not short selling):",
+            f"Signals evaluated: {sell['trades']}",
+            f"Bearish wins / losses: {sell['wins']} / {sell['losses']}",
+            f"Directional win rate: {sell['win_rate_pct']:.2f}%"
+            if sell["win_rate_pct"] is not None
+            else "Directional win rate: N/A",
+            f"Average bearish return: {sell['average_return_pct']:+.2f}%"
+            if sell["average_return_pct"] is not None
+            else "Average bearish return: N/A",
+            "",
+            "Combined directional diagnostic (not strategy win rate):",
+            f"Signals: {summary['trades']}",
+            f"Directional wins / losses: {summary['wins']} / {summary['losses']}",
+            f"Average directional return: {summary['average_return_pct']:+.2f}%"
+            if summary["average_return_pct"] is not None
+            else "Average directional return: N/A",
         ])
 
     lines.extend([
         "",
-        "Methodology:",
-        "• Entry: Next available daily observation after signal.",
-        "• Exit: After the selected number of additional observations.",
-        "• Fees and slippage: Excluded.",
+        "Methodology & assumptions:",
+        "• Entry: Next available observation after signal.",
+        "• Exit: Selected additional trading observations.",
+        "• BUY budget: NPR 100,000 per independent trade.",
+        "• Whole shares; buy fees included within budget.",
+        "• NEPSE transaction fees included on BUY and SELL.",
+        "• Estimated slippage: 0.1% per side.",
+        "• SELL signals are diagnostics, not executable short trades.",
+        "• Trades are independent simulations; capital is not shared.",
         "• Prices: Historical daily LTP snapshots, not verified official closes.",
         "• Signals use only data available on their signal dates.",
         disclaimer,

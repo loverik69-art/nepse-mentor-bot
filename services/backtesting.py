@@ -2,7 +2,10 @@
 
 import math
 
-from database.db import get_daily_price_history
+from database.db import (
+    calculate_equity_transaction_fees,
+    get_daily_price_history,
+)
 from services.indicators import (
     calculate_sma,
     calculate_ema,
@@ -114,6 +117,81 @@ def _calculate_forward_return(
     raise ValueError("action must be BUY or SELL")
 
 
+def _calculate_buy_trade_performance(
+    entry_price: float,
+    exit_price: float,
+    budget: float = 100_000,
+    slippage_pct: float = 0.1,
+) -> dict:
+    """Estimate long-only BUY performance after NEPSE fees and slippage."""
+
+    for name, value in (
+        ("entry_price", entry_price),
+        ("exit_price", exit_price),
+        ("budget", budget),
+        ("slippage_pct", slippage_pct),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"{name} must be a finite number")
+
+    if entry_price <= 0 or exit_price <= 0 or budget <= 0:
+        raise ValueError("Prices and budget must be positive")
+    if not 0 <= slippage_pct < 100:
+        raise ValueError("slippage_pct must be between 0 and 100")
+
+    slippage_rate = slippage_pct / 100
+    effective_entry = entry_price * (1 + slippage_rate)
+    effective_exit = exit_price * (1 - slippage_rate)
+    quantity = math.floor(budget / effective_entry)
+
+    while quantity > 0:
+        buy_fees = calculate_equity_transaction_fees(
+            quantity, effective_entry, "buy"
+        )["total_fees"]
+        if quantity * effective_entry + buy_fees <= budget:
+            break
+        quantity -= 1
+
+    if quantity < 1:
+        raise ValueError("Budget is insufficient to buy one share")
+
+    sell_fees = calculate_equity_transaction_fees(
+        quantity, effective_exit, "sell"
+    )["total_fees"]
+
+    gross_profit = (exit_price - entry_price) * quantity
+    slippage_cost = (
+        (effective_entry - entry_price)
+        + (exit_price - effective_exit)
+    ) * quantity
+    total_fees = buy_fees + sell_fees
+    net_profit = gross_profit - slippage_cost - total_fees
+    invested_capital = quantity * effective_entry + buy_fees
+
+    return {
+        "quantity": quantity,
+        "gross_profit": round(gross_profit, 2),
+        "gross_return_pct": round(
+            gross_profit / (quantity * entry_price) * 100, 2
+        ),
+        "buy_fees": round(buy_fees, 2),
+        "sell_fees": round(sell_fees, 2),
+        "total_fees": round(total_fees, 2),
+        "slippage_cost": round(slippage_cost, 2),
+        "net_profit": round(net_profit, 2),
+        "net_return_pct": round(
+            net_profit / invested_capital * 100, 2
+        ),
+        "net_return_pct_exact": (
+            net_profit / invested_capital * 100
+        ),
+    }
+
+
 def _summarize_horizon(trades: list[dict]) -> dict:
     """Summarize completed directional trades for one horizon."""
 
@@ -149,8 +227,9 @@ async def backtest_symbol(
     next available observation. Each horizon measures subsequent available
     trading observations from that entry.
 
-    Fees and slippage are excluded. Historical prices are daily LTP snapshots,
-    not independently verified official closing prices.
+    BUY trades include estimated NEPSE fees and configurable slippage.
+    SELL signals are bearish diagnostics, not executable short trades.
+    Historical prices are daily LTP snapshots, not verified official closes.
     """
 
     symbol, horizons = _validate_backtest_inputs(
@@ -180,6 +259,9 @@ async def backtest_symbol(
     prices = [row["ltp"] for row in rows]
     signal_counts = {"BUY": 0, "SELL": 0, "HOLD": 0}
     horizon_trades = {horizon: [] for horizon in horizons}
+    buy_execution_trades = {horizon: [] for horizon in horizons}
+    buy_skipped_budget = {horizon: 0 for horizon in horizons}
+    sell_signal_trades = {horizon: [] for horizon in horizons}
     directional_counts = {
         horizon: {"BUY": 0, "SELL": 0}
         for horizon in horizons
@@ -228,12 +310,73 @@ async def backtest_symbol(
             })
             directional_counts[horizon][action] += 1
 
+            if action == "BUY":
+                try:
+                    performance = _calculate_buy_trade_performance(
+                        entry_price,
+                        exit_price,
+                    )
+                except ValueError as exc:
+                    if str(exc) != "Budget is insufficient to buy one share":
+                        raise
+                    buy_skipped_budget[horizon] += 1
+                else:
+                    buy_execution_trades[horizon].append(performance)
+            else:
+                sell_signal_trades[horizon].append({
+                    "return_pct": return_pct,
+                })
+
     results = {}
 
     for horizon in horizons:
         summary = _summarize_horizon(horizon_trades[horizon])
         summary["buy_trades"] = directional_counts[horizon]["BUY"]
         summary["sell_trades"] = directional_counts[horizon]["SELL"]
+
+        buy_trades = buy_execution_trades[horizon]
+        buy_summary = _summarize_horizon([
+            {"return_pct": trade["net_return_pct_exact"]}
+            for trade in buy_trades
+        ])
+        buy_summary["average_return_pct"] = (
+            round(
+                sum(t["net_return_pct"] for t in buy_trades)
+                / len(buy_trades),
+                2,
+            )
+            if buy_trades else None
+        )
+        buy_summary.update({
+            "average_gross_return_pct": (
+                round(
+                    sum(t["gross_return_pct"] for t in buy_trades)
+                    / len(buy_trades),
+                    2,
+                )
+                if buy_trades else None
+            ),
+            "total_gross_profit": round(
+                sum(t["gross_profit"] for t in buy_trades), 2
+            ),
+            "total_net_profit": round(
+                sum(t["net_profit"] for t in buy_trades), 2
+            ),
+            "total_fees": round(
+                sum(t["total_fees"] for t in buy_trades), 2
+            ),
+            "total_slippage_cost": round(
+                sum(t["slippage_cost"] for t in buy_trades), 2
+            ),
+            "investment_budget": 100_000,
+            "slippage_pct_per_side": 0.1,
+            "skipped_budget": buy_skipped_budget[horizon],
+        })
+
+        summary["buy_execution"] = buy_summary
+        summary["sell_signal"] = _summarize_horizon(
+            sell_signal_trades[horizon]
+        )
         results[horizon] = summary
 
     return {
@@ -246,7 +389,13 @@ async def backtest_symbol(
         "methodology": {
             "entry": "Next available daily observation after signal",
             "horizons": "Subsequent available trading observations after entry",
-            "fees_and_slippage": "Excluded",
+            "buy_execution": (
+                "Long-only BUY simulation; NPR 100,000 budget per trade, "
+                "whole shares, NEPSE fees, and 0.1% slippage per side"
+            ),
+            "sell_signals": (
+                "Bearish directional evaluation only; not executable short sales"
+            ),
             "price_source": "Daily LTP snapshots; not verified official closes",
             "look_ahead_bias": "Signal indicators use only observations available on the signal date",
         },

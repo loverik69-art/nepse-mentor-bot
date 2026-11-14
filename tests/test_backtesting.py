@@ -97,6 +97,18 @@ def test_summarize_horizon_with_wins_and_losses():
     }
 
 
+def test_summarize_horizon_classifies_unrounded_small_returns():
+    result = bt._summarize_horizon([
+        {"return_pct": 0.004},
+        {"return_pct": -0.004},
+    ])
+
+    assert result["wins"] == 1
+    assert result["losses"] == 1
+    assert result["win_rate_pct"] == 50.0
+    assert result["average_return_pct"] == 0.0
+
+
 def test_summarize_horizon_empty():
     assert bt._summarize_horizon([]) == {
         "trades": 0,
@@ -166,6 +178,27 @@ def test_backtest_uses_next_observation_and_no_future_data(
         round((expected_buy + expected_sell) / 2, 2)
     )
 
+    expected_execution = bt._calculate_buy_trade_performance(150, 151)
+    buy_result = one_day["buy_execution"]
+    assert buy_result["trades"] == 1
+    assert buy_result["wins"] == int(
+        expected_execution["net_return_pct"] > 0
+    )
+    assert buy_result["average_return_pct"] == (
+        expected_execution["net_return_pct"]
+    )
+    assert buy_result["total_net_profit"] == (
+        expected_execution["net_profit"]
+    )
+    assert buy_result["investment_budget"] == 100_000
+    assert buy_result["slippage_pct_per_side"] == 0.1
+
+    sell_result = one_day["sell_signal"]
+    assert sell_result["trades"] == 1
+    assert sell_result["average_return_pct"] == round(
+        expected_sell, 2
+    )
+
 
 def test_backtest_handles_insufficient_history(monkeypatch):
     import asyncio
@@ -186,3 +219,82 @@ def test_backtest_handles_insufficient_history(monkeypatch):
     assert result["signals"] == {"BUY": 0, "SELL": 0, "HOLD": 0}
     assert result["results"][5]["trades"] == 0
     assert "51 daily observations" in result["message"]
+
+
+def test_calculate_buy_trade_performance_includes_all_costs():
+    result = bt._calculate_buy_trade_performance(500, 550)
+
+    assert result["quantity"] == 199
+    assert result["gross_profit"] == 9950.00
+    assert result["buy_fees"] == 343.62
+    assert result["sell_fees"] == 402.22
+    assert result["total_fees"] == 745.84
+    assert result["slippage_cost"] == 208.95
+    assert result["net_profit"] == 8995.21
+    assert result["net_return_pct"] == 9.0
+
+
+def test_calculate_buy_trade_performance_losing_trade():
+    result = bt._calculate_buy_trade_performance(500, 450)
+
+    assert result["gross_profit"] < 0
+    assert result["net_profit"] < result["gross_profit"]
+    assert result["net_return_pct"] < result["gross_return_pct"]
+
+
+@pytest.mark.parametrize(
+    ("entry", "exit_price", "budget", "slippage"),
+    [
+        (0, 100, 100_000, 0.1),
+        (100, -1, 100_000, 0.1),
+        (100, 110, 0, 0.1),
+        (100, 110, 100_000, -0.1),
+        (100, 110, 100_000, 100),
+        (True, 110, 100_000, 0.1),
+        (100, float("nan"), 100_000, 0.1),
+    ],
+)
+def test_calculate_buy_trade_performance_rejects_invalid_inputs(
+    entry, exit_price, budget, slippage
+):
+    with pytest.raises(ValueError):
+        bt._calculate_buy_trade_performance(
+            entry, exit_price, budget, slippage
+        )
+
+
+def test_backtest_skips_buy_when_budget_cannot_afford_one_share(monkeypatch):
+    import asyncio
+
+    rows = [
+        {
+            "trading_date": f"2026-01-{i + 1:02d}",
+            "ltp": 200_000.0 + i,
+        }
+        for i in range(52)
+    ]
+
+    async def fake_history(symbol, limit):
+        return rows[:limit]
+
+    def fake_analysis(symbol, prices):
+        return {"observations": len(prices)}
+
+    def fake_signal(analysis):
+        return {
+            "signal": "BUY" if analysis["observations"] == 50 else "HOLD"
+        }
+
+    monkeypatch.setattr(bt, "get_daily_price_history", fake_history)
+    monkeypatch.setattr(bt, "_build_historical_analysis", fake_analysis)
+    monkeypatch.setattr(bt, "generate_signal", fake_signal)
+
+    result = asyncio.run(
+        bt.backtest_symbol("NABIL", horizons=(1,), limit=52)
+    )
+
+    buy = result["results"][1]["buy_execution"]
+    assert buy["trades"] == 0
+    assert buy["skipped_budget"] == 1
+    assert buy["total_net_profit"] == 0
+    assert buy["win_rate_pct"] is None
