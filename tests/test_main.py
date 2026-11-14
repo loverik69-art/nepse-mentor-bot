@@ -107,3 +107,50 @@ def test_build_application_requires_job_queue(monkeypatch):
 
     with pytest.raises(RuntimeError, match="JobQueue is unavailable"):
         main.build_application()
+
+
+def test_post_init_syncs_telegram_command_menu(monkeypatch):
+    class FakeBot:
+        commands = None
+
+        async def set_my_commands(self, commands):
+            self.commands = commands
+
+    fake_bot = FakeBot()
+    fake_app = SimpleNamespace(bot=fake_bot)
+    initialized = []
+
+    async def fake_init_db():
+        initialized.append(True)
+
+    monkeypatch.setattr(main, "init_db", fake_init_db)
+
+    asyncio.run(main.post_init(fake_app))
+
+    assert initialized == [True]
+    assert fake_bot.commands == main.BOT_COMMANDS
+    assert len(fake_bot.commands) == 33
+    assert len({command.command for command in fake_bot.commands}) == 33
+
+
+def test_post_init_continues_if_command_menu_sync_fails(
+    monkeypatch, caplog
+):
+    class FakeBot:
+        async def set_my_commands(self, commands):
+            raise RuntimeError("Telegram API unavailable")
+
+    initialized = []
+
+    async def fake_init_db():
+        initialized.append(True)
+
+    monkeypatch.setattr(main, "init_db", fake_init_db)
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(
+            main.post_init(SimpleNamespace(bot=FakeBot()))
+        )
+
+    assert initialized == [True]
+    assert "Failed to synchronize Telegram command menu" in caplog.text

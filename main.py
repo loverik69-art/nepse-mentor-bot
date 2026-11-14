@@ -4,6 +4,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from telegram import BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -61,6 +62,44 @@ from bot.handlers import (
     RISK,
     MAX_RISK,
 )
+
+
+
+BOT_COMMANDS = [
+    BotCommand("start", "Start the bot and set up your profile"),
+    BotCommand("cancel", "Cancel the current setup"),
+    BotCommand("profile", "View your investor profile"),
+    BotCommand("help", "View available commands"),
+    BotCommand("health", "Check bot and database health"),
+    BotCommand("stock", "Analyze a NEPSE stock"),
+    BotCommand("gainers", "View top gaining stocks"),
+    BotCommand("losers", "View top losing stocks"),
+    BotCommand("data_status", "Check market data freshness"),
+    BotCommand("history", "View historical stock prices"),
+    BotCommand("chart", "Generate a stock chart"),
+    BotCommand("indicators", "View technical indicators"),
+    BotCommand("signal", "View technical trading signals"),
+    BotCommand("tradeplan", "Generate a trading plan"),
+    BotCommand("backtest", "Backtest a trading strategy"),
+    BotCommand("compare", "Compare stocks"),
+    BotCommand("fundamentals", "View fundamental analysis"),
+    BotCommand("ask", "Ask your NEPSE mentor"),
+    BotCommand("watchlist", "View your watchlist"),
+    BotCommand("watchadd", "Add a stock to your watchlist"),
+    BotCommand("watchremove", "Remove a stock from your watchlist"),
+    BotCommand("addstock", "Add a portfolio holding"),
+    BotCommand("buy", "Record a stock purchase"),
+    BotCommand("sell", "Record a stock sale"),
+    BotCommand("transactions", "View transaction history"),
+    BotCommand("portfolio", "View your portfolio"),
+    BotCommand("removestock", "Remove a portfolio holding"),
+    BotCommand("allocation", "View portfolio allocation"),
+    BotCommand("diversification", "Check portfolio diversification"),
+    BotCommand("performance", "View portfolio performance"),
+    BotCommand("alert", "Create a price alert"),
+    BotCommand("alerts", "View your price alerts"),
+    BotCommand("removealert", "Remove a price alert"),
+]
 
 
 def configure_logging():
@@ -125,6 +164,17 @@ async def global_error_handler(update, context):
 
 async def post_init(application):
     await init_db()
+
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+        logging.getLogger(__name__).info(
+            "Telegram command menu synchronized: %d commands",
+            len(BOT_COMMANDS),
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Failed to synchronize Telegram command menu"
+        )
 
 
 def build_application():
