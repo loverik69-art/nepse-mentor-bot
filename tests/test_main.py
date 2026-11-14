@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import pytest
 from types import SimpleNamespace
 
+import main
 from main import global_error_handler
 
 
@@ -23,3 +25,85 @@ def test_global_error_handler_handles_missing_exception(caplog):
         asyncio.run(global_error_handler(None, context))
 
     assert "without exception details" in caplog.text
+
+
+class FakeJobQueue:
+    def __init__(self):
+        self.jobs = []
+
+    def run_repeating(self, callback, **kwargs):
+        self.jobs.append((callback, kwargs))
+
+
+class FakeApp:
+    def __init__(self, job_queue=True):
+        self.job_queue = FakeJobQueue() if job_queue else None
+        self.handlers = []
+        self.error_handlers = []
+
+    def add_handler(self, handler):
+        self.handlers.append(handler)
+
+    def add_error_handler(self, handler):
+        self.error_handlers.append(handler)
+
+
+class FakeBuilder:
+    def __init__(self, app):
+        self.app = app
+
+    def token(self, value):
+        return self
+
+    def post_init(self, callback):
+        self.init_callback = callback
+        return self
+
+    def build(self):
+        return self.app
+
+
+def test_build_application_registers_scheduled_jobs(monkeypatch):
+    fake_app = FakeApp()
+
+    class FakeApplication:
+        @staticmethod
+        def builder():
+            return FakeBuilder(fake_app)
+
+    monkeypatch.setattr(main, "Application", FakeApplication)
+
+    app = main.build_application()
+
+    assert app.error_handlers == [main.global_error_handler]
+    assert len(app.job_queue.jobs) == 2
+
+    alert_callback, alert_config = app.job_queue.jobs[0]
+    assert alert_callback is main.check_price_alerts_job
+    assert alert_config == {
+        "interval": 300,
+        "first": 30,
+        "name": "price-alert-checker",
+    }
+
+    backup_callback, backup_config = app.job_queue.jobs[1]
+    assert backup_callback is main.automatic_database_backup
+    assert backup_config == {
+        "interval": 86400,
+        "first": 60,
+        "name": "automatic-database-backup",
+    }
+
+
+def test_build_application_requires_job_queue(monkeypatch):
+    fake_app = FakeApp(job_queue=False)
+
+    class FakeApplication:
+        @staticmethod
+        def builder():
+            return FakeBuilder(fake_app)
+
+    monkeypatch.setattr(main, "Application", FakeApplication)
+
+    with pytest.raises(RuntimeError, match="JobQueue is unavailable"):
+        main.build_application()
