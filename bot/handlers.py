@@ -30,6 +30,7 @@ from database.db import (
 from services.technical_analysis import get_technical_analysis
 from services.signals import get_stock_signal
 from services.backtesting import backtest_symbol
+from services.trade_planner import get_trade_plan
 from services.chart_generator import generate_price_chart
 from services.fundamental_data import (
     FundamentalDataError,
@@ -153,6 +154,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/fundamentals SYMBOL — financial reports and ratios\n\n"
         "🎯 TRADING SIGNALS & BACKTESTING\n"
         "/signal SYMBOL — current technical trading signal\n"
+        "/tradeplan SYMBOL — risk-aware buying and selling plan\n"
         "/backtest SYMBOL — historical signal performance\n\n"
         "👀 WATCHLIST\n"
         "/watchadd SYMBOL — add a stock to your watchlist\n"
@@ -2237,6 +2239,92 @@ async def signal_command(
     lines.extend(f"• {reason}" for reason in result["reasons"])
     lines.append(disclaimer)
 
+    await update.message.reply_text("\n".join(lines))
+
+
+async def tradeplan_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    disclaimer = (
+        "\n\n⚠️ Educational research only — not financial advice. "
+        "Historical LTP snapshots are not verified official closing prices "
+        "or OHLC candles. Levels are estimates, not guaranteed execution prices."
+    )
+
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "Usage: /tradeplan SYMBOL\n"
+            "Example: /tradeplan NABIL" + disclaimer
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+
+    if not symbol.isalnum():
+        await update.message.reply_text(
+            "Invalid stock symbol. Please use a valid symbol, e.g. NABIL."
+            + disclaimer
+        )
+        return
+
+    try:
+        result = await get_trade_plan(
+            symbol,
+            update.effective_user.id,
+        )
+    except ValueError as exc:
+        await update.message.reply_text(f"⚠️ {exc}" + disclaimer)
+        return
+    except Exception:
+        logging.exception("Failed to generate trade plan for %s", symbol)
+        await update.message.reply_text(
+            "⚠️ Unable to generate a trade plan right now." + disclaimer
+        )
+        return
+
+    if result["status"] != "AVAILABLE":
+        await update.message.reply_text(
+            f"📊 Trade Plan — {result['symbol']}\n\n"
+            f"⚠️ Plan unavailable\n{result['reason']}"
+            + disclaimer
+        )
+        return
+
+    buying = result["buying_range"]
+    selling = result["selling_range"]
+    reward = result["risk_reward"]
+
+    lines = [
+        f"📊 Trade Plan — {result['symbol']}",
+        "",
+        f"Trading style: {result['trading_style']}",
+        f"Risk tolerance: {result['risk_tolerance']}",
+        f"Current LTP snapshot: NPR {result['current_price']:.2f}",
+        f"Historical observations: {result['lookback_observations']}",
+        "",
+        "🟢 ENTRY PLAN",
+        f"Buying range: NPR {buying['low']:.2f} – {buying['high']:.2f}",
+        f"Entry reference: NPR {result['entry_reference']:.2f}",
+        "",
+        "🔴 EXIT PLAN",
+        f"Selling range: NPR {selling['low']:.2f} – {selling['high']:.2f}",
+        f"Target 1: NPR {result['target_1']:.2f}",
+        f"Target 2: NPR {result['target_2']:.2f}",
+        f"Stop loss: NPR {result['stop_loss']:.2f}",
+        "",
+        "⚖️ RISK & POSITION SIZE",
+        f"Target 1 risk/reward: 1:{reward['target_1']:.2f}",
+        f"Target 2 risk/reward: 1:{reward['target_2']:.2f}",
+        f"Risk budget: NPR {result['risk_budget_npr']:.2f}",
+        f"Suggested quantity: {result['suggested_quantity']} shares",
+        f"Estimated investment: NPR {result['estimated_investment_npr']:.2f}",
+        f"Estimated maximum loss: NPR {result['estimated_max_loss_npr']:.2f}",
+        "",
+        "Method: " + result["methodology"],
+    ]
+
+    lines.append(disclaimer)
     await update.message.reply_text("\n".join(lines))
 
 

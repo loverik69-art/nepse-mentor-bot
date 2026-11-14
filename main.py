@@ -26,6 +26,7 @@ from bot.handlers import (
     chart_command,
     indicators_command,
     signal_command,
+    tradeplan_command,
     backtest_command,
     compare_command,
     fundamentals_command,
@@ -172,6 +173,7 @@ def build_application():
     app.add_handler(CommandHandler("chart", chart_command))
     app.add_handler(CommandHandler("indicators", indicators_command))
     app.add_handler(CommandHandler("signal", signal_command))
+    app.add_handler(CommandHandler("tradeplan", tradeplan_command))
     app.add_handler(CommandHandler("backtest", backtest_command))
     app.add_handler(CommandHandler("compare", compare_command))
     app.add_handler(CommandHandler("fundamentals", fundamentals_command))
