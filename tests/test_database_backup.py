@@ -182,3 +182,70 @@ def test_restore_preserves_multiple_tables_and_records(tmp_path):
     assert integrity == "ok"
     assert holdings == [("NABIL", 10.0), ("NICA", 5.0)]
     assert transactions == [("NABIL", "buy"), ("NICA", "sell")]
+
+
+def test_restore_failure_during_final_swap_preserves_target(
+    tmp_path, monkeypatch
+):
+    import database.backup as backup_module
+
+    target = tmp_path / "nepse.db"
+    backup_dir = tmp_path / "backups"
+    safety_dir = tmp_path / "safety"
+
+    with sqlite3.connect(target) as connection:
+        connection.execute("CREATE TABLE test (value INTEGER)")
+        connection.execute("INSERT INTO test VALUES (123)")
+
+    backup = create_database_backup(target, backup_dir)
+
+    with sqlite3.connect(target) as connection:
+        connection.execute("UPDATE test SET value = 456")
+
+    def fail_replace(source, destination):
+        raise OSError("Simulated final swap failure")
+
+    monkeypatch.setattr(backup_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="Simulated final swap failure"):
+        restore_database_backup(backup, target, safety_dir)
+
+    with sqlite3.connect(target) as connection:
+        value = connection.execute(
+            "SELECT value FROM test"
+        ).fetchone()[0]
+
+    assert value == 456
+    assert list(target.parent.glob(".nepse.db.restore-*.tmp")) == []
+    assert list(safety_dir.glob("nepse-*.db"))
+
+
+def test_prune_preserves_unrelated_files(tmp_path):
+    from database.backup import prune_database_backups
+
+    backup_dir = tmp_path / "automatic"
+    backup_dir.mkdir()
+
+    old_backup = backup_dir / "nepse-20261101.db"
+    new_backup = backup_dir / "nepse-20261102.db"
+    unrelated = backup_dir / "important.txt"
+
+    old_backup.touch()
+    new_backup.touch()
+    unrelated.write_text("Keep this file")
+
+    removed = prune_database_backups(backup_dir, keep=1)
+
+    assert removed == [old_backup]
+    assert not old_backup.exists()
+    assert new_backup.exists()
+    assert unrelated.read_text() == "Keep this file"
+
+
+def test_prune_missing_directory_returns_empty_list(tmp_path):
+    from database.backup import prune_database_backups
+
+    backup_dir = tmp_path / "missing"
+
+    assert prune_database_backups(backup_dir) == []
+    assert not backup_dir.exists()

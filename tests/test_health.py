@@ -120,3 +120,21 @@ def test_health_reports_fresh_and_stale_counts(monkeypatch):
     assert "Stale stock records: 1" in response
     assert "Stale data percentage: 50.0%" in response
 
+
+
+def test_health_reports_empty_market_data(monkeypatch):
+    monkeypatch.setattr(
+        handlers, "check_db", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        handlers, "fetch_market_data",
+        AsyncMock(return_value=[])
+    )
+
+    update = make_update()
+    asyncio.run(handlers.health(update, None))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "NEPSE feed: No stock records returned" in response
+    assert "Valid stock records: 0" in response

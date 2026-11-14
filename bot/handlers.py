@@ -206,37 +206,33 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # NEPSE market-data provider
     try:
         stocks = await fetch_market_data()
-        fresh_count = sum(1 for stock in stocks if not stock["is_stale"])
-        stale_count = len(stocks) - fresh_count
-        stale_percentage = stale_count / len(stocks) * 100
-        fresh_count = sum(1 for stock in stocks if not stock["is_stale"])
-        stale_count = len(stocks) - fresh_count
-        stale_percentage = stale_count / len(stocks) * 100
 
-        newest = min(
-            stocks,
-            key=lambda stock: stock["age_minutes"],
-        )
-
-        age = newest["age_minutes"]
-        timestamp = newest["last_updated"]
-        source = newest["source"]
-
-        lines.append("")
-
-        if newest["is_stale"]:
-            lines.append("⚠️ NEPSE feed: Reachable, but stale")
+        if not stocks:
+            lines.append("")
+            lines.append("❌ NEPSE feed: No stock records returned")
+            lines.append("📊 Valid stock records: 0")
         else:
-            lines.append("✅ NEPSE feed: Reachable and fresh")
+            fresh_count = sum(1 for stock in stocks if not stock["is_stale"])
+            stale_count = len(stocks) - fresh_count
+            stale_percentage = stale_count / len(stocks) * 100
 
-        lines.append(f"📊 Valid stock records: {len(stocks)}")
-        lines.append(f"🕒 Newest update: {timestamp}")
-        lines.append(f"⌛ Data age: {age} minutes")
-        lines.append(f"📡 Source: {source}")
-        lines.append(f"Fresh stock records: {fresh_count}")
-        lines.append(f"Stale stock records: {stale_count}")
-        lines.append(f"Stale data percentage: {stale_percentage:.1f}%")
-   
+            newest = min(stocks, key=lambda stock: stock["age_minutes"])
+            age = newest["age_minutes"]
+            timestamp = newest["last_updated"]
+            source = newest["source"]
+
+            lines.append("")
+            if newest["is_stale"]:
+                lines.append("⚠️ NEPSE feed: Reachable, but stale")
+            else:
+                lines.append("✅ NEPSE feed: Reachable and fresh")
+            lines.append(f"📊 Valid stock records: {len(stocks)}")
+            lines.append(f"🕒 Newest update: {timestamp}")
+            lines.append(f"⌛ Data age: {age} minutes")
+            lines.append(f"📡 Source: {source}")
+            lines.append(f"Fresh stock records: {fresh_count}")
+            lines.append(f"Stale stock records: {stale_count}")
+            lines.append(f"Stale data percentage: {stale_percentage:.1f}%")
     except MarketDataError as exc:
         logging.warning("NEPSE feed health check failed: %s", exc)
         lines.append("")

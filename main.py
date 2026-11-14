@@ -108,6 +108,21 @@ async def automatic_database_backup(context):
         logger.exception("Automatic database backup failed")
 
 
+async def global_error_handler(update, context):
+    """Log unexpected errors raised while processing Telegram updates."""
+    logger = logging.getLogger(__name__)
+    error = context.error
+
+    if error is None:
+        logger.error("Unhandled Telegram update error without exception details")
+        return
+
+    logger.error(
+        "Unhandled exception while processing a Telegram update",
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
 async def post_init(application):
     await init_db()
 
@@ -119,6 +134,8 @@ def build_application():
         .post_init(post_init)
         .build()
     )
+
+    app.add_error_handler(global_error_handler)
 
     onboarding = ConversationHandler(
         entry_points=[
