@@ -1,55 +1,161 @@
-# NEPSE Mentor Bot — Phase 1
+# NEPSE Mentor Bot
 
-Android-first Telegram bot starter. Phase 1 implements Telegram polling, onboarding, profile persistence in SQLite, `/profile`, `/help`, and `/health`.
+An Android/Termux-friendly Telegram bot for NEPSE stock research, technical and fundamental analysis, trading education, and portfolio tracking.
 
-## Termux setup
+## Features
 
-Install Termux from F-Droid or the official GitHub release. Then:
+### Market research
+- Stock information and historical prices
+- Technical indicators and charts
+- Top gainers and losers
+- Stock comparison
+- Company financial reports and fundamental analysis
 
-```bash
-pkg update && pkg upgrade -y
-pkg install python git clang make pkg-config libffi openssl -y
-mkdir -p ~/nepse_mentor_bot
-cd ~/nepse_mentor_bot
-```
+### Trading research
+- Technical trading signals
+- Risk-aware trade plans
+- Historical backtesting
+- Rule-based NEPSE stock mentor using `/ask`
 
-Extract the project ZIP into this directory, then:
+### Portfolio management
+- Portfolio holdings and allocation
+- Buy and sell transaction records
+- Automatic NEPSE transaction-fee calculations
+- Transaction history and performance
+- Diversification analysis
 
-```bash
-python -m venv venv
-source venv/bin/activate
-pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-cp .env.example .env
-nano .env
-```
+### Watchlist and alerts
+- Add, view, and remove watchlist stocks
+- Above-price and below-price alerts
 
-Add the token from Telegram's official `@BotFather` to `TELEGRAM_BOT_TOKEN`. Keep `.env` private.
+### Reliability
+- SQLite database storage
+- Automatic daily database backups
+- Backup integrity verification
+- Telegram error logging
+- Market-data health and freshness checks
 
-Run:
+## Telegram commands
 
-```bash
-python main.py
-```
+### Market analysis
+- `/stock SYMBOL` — stock information
+- `/history SYMBOL` — historical prices
+- `/indicators SYMBOL` — technical indicators
+- `/gainers` and `/losers` — market leaders
+- `/chart SYMBOL [LIMIT]` — technical chart
+- `/compare SYMBOL1 SYMBOL2` — stock comparison
+- `/fundamentals SYMBOL` — company financial analysis
+- `/ask QUESTION` — ask the NEPSE stock mentor
 
-Open your bot in Telegram and send `/start`.
+### Trading research
+- `/signal SYMBOL` — technical signal
+- `/tradeplan SYMBOL` — risk-aware trade plan
+- `/backtest SYMBOL` — historical backtesting
 
-## Commands in Phase 1
+### Portfolio management
+- `/addstock` — add a portfolio holding
+- `/buy SYMBOL QUANTITY PRICE` — record a purchase
+- `/sell SYMBOL QUANTITY PRICE` — record a sale
+- `/transactions [LIMIT]` — transaction history
+- `/portfolio` — view portfolio
+- `/removestock SYMBOL` — remove a holding
+- `/allocation` — portfolio allocation
+- `/diversification` — concentration analysis
+- `/performance` — portfolio performance
 
-- `/start` — onboarding
-- `/profile` — view saved profile
-- `/help` — command list
-- `/health` — process health
+### Watchlist and alerts
+- `/watchadd SYMBOL` — add a stock
+- `/watchlist` — view saved stocks
+- `/watchremove SYMBOL` — remove a stock
+- `/alert SYMBOL above|below PRICE` — create a price alert
+- `/alerts` — view active alerts
+- `/removealert ID` — remove an alert
 
-## Notes
+### System commands
+- `/start` — start the bot
+- `/profile` — view your profile
+- `/health` — check bot health
+- `/data_status` — check market-data freshness
+- `/help` — show available commands
 
-- This phase does not fetch NEPSE prices and does not generate trade recommendations.
-- No market data is fabricated. Provider integration comes in a later phase.
-- SQLite database is created automatically at first startup.
-- Keep Termux open while testing. Android battery optimization can stop background processes.
-- For a long-running session, install Termux:Boot from the same trusted distribution if you later configure boot startup. Do not assume Android guarantees continuous execution.
-- Back up `nepse.db` regularly.
+## Installation on Termux
+
+1. Install Python and Git:
+   `pkg install python git`
+
+2. Clone the repository:
+   `git clone https://github.com/loverik69-art/nepse-mentor-bot.git`
+
+3. Enter the project directory:
+   `cd nepse-mentor-bot`
+
+4. Create and activate a virtual environment:
+   `python -m venv venv`
+   `source venv/bin/activate`
+
+5. Install dependencies:
+   `pip install -r requirements.txt`
+
+6. Create your environment file:
+   `cp .env.example .env`
+
+7. Edit `.env` using a text editor and add your Telegram bot token from BotFather.
+
+8. Start the bot:
+   `python main.py`
+
+## Environment variables
+
+Configure these values in `.env`:
+
+- `TELEGRAM_BOT_TOKEN` — Telegram bot token (required)
+- `ADMIN_CHAT_ID` — optional administrator chat ID
+- `DATABASE_PATH` — SQLite database path (default: `nepse.db`)
+- `LOG_LEVEL` — logging level (default: `INFO`)
+- `DATA_CACHE_SECONDS` — market-data cache duration
+- `MAX_RISK_DEFAULT` — default risk setting
+
+## Market-data notes
+
+- Market data is retrieved from the YONEPSE community data feed.
+- Historical data is used for technical indicators and backtesting.
+- Feed availability and freshness can vary.
+- Use `/data_status` to check whether market data is fresh or stale.
+- Prices are not guaranteed to be live exchange quotes.
+- Verify important prices independently before making trading decisions.
+
+## Database and backups
+
+- Portfolio and profile information is stored in SQLite.
+- Automatic database backups are scheduled daily.
+- Backups are integrity-checked.
+- Automatic backups are retained in `backups/automatic/`.
+- Application logs are stored in `logs/bot.log`.
+
+## Testing
+
+Run the complete test suite:
+
+`python -m pytest -q`
+
+Check Python syntax:
+
+`python -m py_compile main.py`
 
 ## Security
 
-Never share your Telegram bot token. If exposed, revoke it using BotFather and create a replacement.
+- Never commit `.env` or expose your Telegram bot token.
+- Keep database backups private.
+- Do not share portfolio database files publicly.
+- Keep dependencies updated.
+
+## Disclaimer
+
+Educational analysis only — not financial advice. NEPSE is volatile; trade at your own risk. Market-feed prices may not be verified live exchange quotes.
+
+## Android runtime notes
+
+- Keep Termux running while the bot is operating.
+- Android battery optimization may stop background processes.
+- Configure Termux battery settings appropriately for longer-running sessions.
+- Android does not guarantee uninterrupted bot operation.
