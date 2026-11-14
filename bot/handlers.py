@@ -36,6 +36,7 @@ from services.fundamental_data import (
     FundamentalDataError,
     get_company_financials,
 )
+from services.stock_mentor import answer_question
 from services.fundamental_analysis import (
     analyze_company_reports,
     calculate_pb_ratio,
@@ -151,7 +152,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/losers — top losing stocks\n"
         "/chart SYMBOL [LIMIT] — technical chart\n"
         "/compare SYMBOL1 SYMBOL2 — compare stocks\n"
-        "/fundamentals SYMBOL — financial reports and ratios\n\n"
+        "/fundamentals SYMBOL — financial reports and ratios\n"
+        "/ask QUESTION — ask the NEPSE stock mentor\n\n"
         "🎯 TRADING SIGNALS & BACKTESTING\n"
         "/signal SYMBOL — current technical trading signal\n"
         "/tradeplan SYMBOL — risk-aware buying and selling plan\n"
@@ -2437,3 +2439,44 @@ async def backtest_command(
     ])
 
     await update.message.reply_text("\n".join(lines))
+
+
+async def ask_mentor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer a user's NEPSE question through the stock mentor."""
+    message = update.effective_message
+    user = update.effective_user
+
+    if message is None or user is None:
+        return
+
+    question = " ".join(context.args or []).strip()
+
+    if not question:
+        await message.reply_text(
+            "Ask me a NEPSE question.\n\n"
+            "Examples:\n"
+            "/ask Explain NABIL technical indicators\n"
+            "/ask NICA fundamental analysis\n"
+            "/ask Is SHIVM a buy or sell?\n"
+            "/ask Create a NABIL trade plan\n"
+            "/ask my portfolio"
+        )
+        return
+
+    try:
+        answer = await answer_question(question, user.id)
+    except ValueError as exc:
+        await message.reply_text(str(exc))
+        return
+    except Exception:
+        logging.exception("Stock mentor failed for Telegram user %s", user.id)
+        await message.reply_text(
+            "Sorry, I couldn't complete that analysis right now. "
+            "Please try again later."
+        )
+        return
+
+    answer = str(answer)
+
+    for start in range(0, len(answer), 4000):
+        await message.reply_text(answer[start:start + 4000])

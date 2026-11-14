@@ -20,6 +20,7 @@ from bot.handlers import (
     start,
     profile,
     help_command,
+    ask_mentor,
     health,
     stock_command,
     history_command,
@@ -177,6 +178,7 @@ def build_application():
     app.add_handler(CommandHandler("backtest", backtest_command))
     app.add_handler(CommandHandler("compare", compare_command))
     app.add_handler(CommandHandler("fundamentals", fundamentals_command))
+    app.add_handler(CommandHandler("ask", ask_mentor))
     app.add_handler(CommandHandler("watchlist", watchlist_command))
     app.add_handler(CommandHandler("watchadd", watchadd_command))
     app.add_handler(CommandHandler("watchremove", watchremove_command))
