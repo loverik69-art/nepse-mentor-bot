@@ -40,7 +40,7 @@ def test_bullish_conditions_generate_buy():
     result = generate_signal(make_analysis())
 
     assert result["signal"] == "BUY"
-    assert result["score"] == 4
+    assert result["score"] == 3
 
 
 def test_bearish_conditions_generate_sell():
@@ -57,16 +57,16 @@ def test_bearish_conditions_generate_sell():
     result = generate_signal(analysis)
 
     assert result["signal"] == "SELL"
-    assert result["score"] == -4
+    assert result["score"] == -3
 
 
-def test_mixed_conditions_generate_hold():
+def test_disagreeing_trends_do_not_double_count():
     analysis = make_analysis(
         sma_20=110,
         sma_50=100,
         ema_20=90,
         ema_50=100,
-        rsi_14=60,
+        rsi_14=40,
         macd_value=2,
         macd_signal=1,
     )
@@ -74,7 +74,17 @@ def test_mixed_conditions_generate_hold():
     result = generate_signal(analysis)
 
     assert result["signal"] == "HOLD"
+    assert result["score"] == 0
+    assert any("Neutral: SMA and EMA" in reason for reason in result["reasons"])
+
+
+@pytest.mark.parametrize("rsi", [30, 70])
+def test_extreme_rsi_is_neutral_with_caution(rsi):
+    result = generate_signal(make_analysis(rsi_14=rsi))
+
+    assert result["signal"] == "BUY"
     assert result["score"] == 2
+    assert any("Caution:" in reason for reason in result["reasons"])
 
 
 def test_missing_indicators_do_not_add_score():

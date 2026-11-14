@@ -2246,7 +2246,7 @@ async def signal_command(
 
     signal = result["signal"]
     score = result["score"]
-    score_text = f"{score:+d}/4"
+    score_text = f"{score:+d}/3"
 
     if signal == "BUY":
         heading = "🟢 BUY"

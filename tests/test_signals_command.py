@@ -14,7 +14,7 @@ def sample_signal(signal="BUY"):
     return {
         "symbol": "NABIL",
         "signal": signal,
-        "score": 4 if signal == "BUY" else 0,
+        "score": 3 if signal == "BUY" else 0,
         "strength": "Strong" if signal == "BUY" else "Unavailable",
         "ltp": 550.0,
         "last_updated": "2026-11-13T14:59:00+05:45",
@@ -40,7 +40,7 @@ def test_signal_command_displays_buy_signal(monkeypatch):
 
     assert "Trading Signal — NABIL" in response
     assert "BUY" in response
-    assert "Score: +4/4" in response
+    assert "Score: +3/3" in response
     assert "Strength: Strong" in response
     assert "NPR 550.00" in response
     assert "Daily observations: 60" in response

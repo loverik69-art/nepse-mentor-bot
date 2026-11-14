@@ -1,14 +1,14 @@
+import math
+
 from services.nepse_data import get_stock
 from services.technical_analysis import get_technical_analysis
-
-import math
 
 
 def generate_signal(
     analysis: dict,
     is_stale: bool = False,
 ) -> dict:
-    """Generate an educational signal from technical indicators."""
+    """Generate a balanced educational signal from technical indicators."""
 
     if not isinstance(analysis, dict):
         raise ValueError("Analysis must be a dictionary")
@@ -31,11 +31,7 @@ def generate_signal(
         raise ValueError("Analysis must contain indicators")
 
     numeric_fields = (
-        "sma_20",
-        "sma_50",
-        "ema_20",
-        "ema_50",
-        "rsi_14",
+        "sma_20", "sma_50", "ema_20", "ema_50", "rsi_14",
     )
 
     for field in numeric_fields:
@@ -75,7 +71,7 @@ def generate_signal(
 
     if is_stale:
         return {
-            "symbol": symbol,
+            "symbol": symbol.strip().upper(),
             "signal": "STALE_DATA",
             "score": 0,
             "strength": "Unavailable",
@@ -86,7 +82,7 @@ def generate_signal(
 
     if observations < 50:
         return {
-            "symbol": symbol,
+            "symbol": symbol.strip().upper(),
             "signal": "INSUFFICIENT_DATA",
             "score": 0,
             "strength": "Unavailable",
@@ -96,81 +92,91 @@ def generate_signal(
         }
 
     score = 0
+    available_factors = 0
     reasons = []
 
-    def add_condition(name, bullish, bearish):
-        nonlocal score
+    def add_factor(name, direction):
+        nonlocal score, available_factors
 
-        if bullish:
+        if direction is None:
+            reasons.append(f"Neutral or unavailable: {name}")
+            return
+
+        available_factors += 1
+
+        if direction > 0:
             score += 1
             reasons.append(f"Bullish: {name}")
-        elif bearish:
+        elif direction < 0:
             score -= 1
             reasons.append(f"Bearish: {name}")
         else:
-            reasons.append(f"Neutral or unavailable: {name}")
+            reasons.append(f"Neutral: {name}")
 
     sma_20 = indicators.get("sma_20")
     sma_50 = indicators.get("sma_50")
     ema_20 = indicators.get("ema_20")
     ema_50 = indicators.get("ema_50")
     rsi = indicators.get("rsi_14")
-    macd = indicators.get("macd")
 
-    add_condition(
-        "SMA 20 vs SMA 50",
-        sma_20 is not None and sma_50 is not None and sma_20 > sma_50,
-        sma_20 is not None and sma_50 is not None and sma_20 < sma_50,
-    )
+    # Factor 1: SMA and EMA must agree on the trend.
+    if all(
+        value is not None
+        for value in (sma_20, sma_50, ema_20, ema_50)
+    ):
+        sma_bullish = sma_20 > sma_50
+        sma_bearish = sma_20 < sma_50
+        ema_bullish = ema_20 > ema_50
+        ema_bearish = ema_20 < ema_50
 
-    add_condition(
-        "EMA 20 vs EMA 50",
-        ema_20 is not None and ema_50 is not None and ema_20 > ema_50,
-        ema_20 is not None and ema_50 is not None and ema_20 < ema_50,
-    )
-
-    add_condition(
-        "RSI 14 momentum",
-        rsi is not None and 50 < rsi < 70,
-        rsi is not None and 30 < rsi < 50,
-    )
-
-    add_condition(
-        "MACD vs signal line",
-        (
-            isinstance(macd, dict)
-            and macd.get("macd") is not None
-            and macd.get("signal") is not None
-            and macd["macd"] > macd["signal"]
-        ),
-        (
-            isinstance(macd, dict)
-            and macd.get("macd") is not None
-            and macd.get("signal") is not None
-            and macd["macd"] < macd["signal"]
-        ),
-    )
-
-    if score >= 3:
-        signal = "BUY"
-    elif score <= -3:
-        signal = "SELL"
+        if sma_bullish and ema_bullish:
+            add_factor("SMA and EMA trend agreement", 1)
+        elif sma_bearish and ema_bearish:
+            add_factor("SMA and EMA trend agreement", -1)
+        else:
+            add_factor("SMA and EMA trend agreement", 0)
     else:
-        signal = "HOLD"
+        add_factor("SMA and EMA trend agreement", None)
 
-    strength = (
-        "Strong"
-        if abs(score) == 4
-        else "Moderate"
-        if abs(score) == 3
-        else "Weak or mixed"
-    )
+    # Factor 2: RSI momentum. Extreme readings are cautions, not signals.
+    if rsi is None:
+        add_factor("RSI 14 momentum", None)
+    elif 50 < rsi < 70:
+        add_factor("RSI 14 momentum", 1)
+    elif 30 < rsi < 50:
+        add_factor("RSI 14 momentum", -1)
+    else:
+        add_factor("RSI 14 momentum", 0)
 
     if rsi is not None:
         if rsi >= 70:
             reasons.append("Caution: RSI is overbought.")
         elif rsi <= 30:
             reasons.append("Caution: RSI is oversold.")
+
+    # Factor 3: MACD confirmation.
+    if macd is None:
+        add_factor("MACD vs signal line", None)
+    elif macd["macd"] > macd["signal"]:
+        add_factor("MACD vs signal line", 1)
+    elif macd["macd"] < macd["signal"]:
+        add_factor("MACD vs signal line", -1)
+    else:
+        add_factor("MACD vs signal line", 0)
+
+    if score >= 2:
+        signal = "BUY"
+    elif score <= -2:
+        signal = "SELL"
+    else:
+        signal = "HOLD"
+
+    if available_factors == 3 and abs(score) == 3:
+        strength = "Strong"
+    elif available_factors >= 2 and abs(score) >= 2:
+        strength = "Moderate"
+    else:
+        strength = "Weak or mixed"
 
     return {
         "symbol": symbol.strip().upper(),
