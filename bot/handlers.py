@@ -43,6 +43,26 @@ from services.fundamental_analysis import (
 )
 
 
+def get_feed_freshness(stocks):
+    """Classify the overall feed using every returned stock record."""
+    total = len(stocks)
+    if total == 0:
+        return "UNAVAILABLE", 0, 0, 0.0
+
+    fresh = sum(1 for stock in stocks if not stock["is_stale"])
+    stale = total - fresh
+    stale_percentage = stale / total * 100
+
+    if stale == 0:
+        status = "FRESH"
+    elif fresh == 0:
+        status = "STALE"
+    else:
+        status = "PARTIALLY STALE"
+
+    return status, fresh, stale, stale_percentage
+
+
 EXPERIENCE, STYLE, CAPITAL, RISK, MAX_RISK = range(5)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -212,9 +232,9 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lines.append("❌ NEPSE feed: No stock records returned")
             lines.append("📊 Valid stock records: 0")
         else:
-            fresh_count = sum(1 for stock in stocks if not stock["is_stale"])
-            stale_count = len(stocks) - fresh_count
-            stale_percentage = stale_count / len(stocks) * 100
+            status, fresh_count, stale_count, stale_percentage = (
+                get_feed_freshness(stocks)
+            )
 
             newest = min(stocks, key=lambda stock: stock["age_minutes"])
             age = newest["age_minutes"]
@@ -222,10 +242,12 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             source = newest["source"]
 
             lines.append("")
-            if newest["is_stale"]:
+            if status == "FRESH":
+                lines.append("✅ NEPSE feed: Reachable and fresh")
+            elif status == "STALE":
                 lines.append("⚠️ NEPSE feed: Reachable, but stale")
             else:
-                lines.append("✅ NEPSE feed: Reachable and fresh")
+                lines.append("⚠️ NEPSE feed: Reachable, but partially stale")
             lines.append(f"📊 Valid stock records: {len(stocks)}")
             lines.append(f"🕒 Newest update: {timestamp}")
             lines.append(f"⌛ Data age: {age} minutes")
@@ -445,9 +467,20 @@ async def data_status_command(
     try:
         stocks = await fetch_market_data()
 
-        fresh_count = sum(1 for stock in stocks if not stock['is_stale'])
-        stale_count = len(stocks) - fresh_count
-        stale_percentage = stale_count / len(stocks) * 100
+        if not stocks:
+            message = (
+                "📡 NEPSE Market Data Status\n\n"
+                "❌ Provider: No stock records returned\n\n"
+                "Do not rely on unverified market prices.\n\n"
+                "⚠️ Educational analysis only — not financial advice. "
+                "NEPSE is volatile; trade at your own risk."
+            )
+            await update.message.reply_text(message)
+            return
+
+        feed_status, fresh_count, stale_count, stale_percentage = (
+            get_feed_freshness(stocks)
+        )
 
         newest = min(
             stocks,
@@ -458,17 +491,23 @@ async def data_status_command(
         hours = age // 60
         minutes = age % 60
 
-        if newest["is_stale"]:
-            status = "⚠️ STALE"
-            recommendation = (
-                "Do not treat these prices as live. "
-                "Wait for refreshed market data."
-            )
-        else:
+        if feed_status == "FRESH":
             status = "✅ FRESH"
             recommendation = (
-                "Data is within the 24-hour freshness threshold. "
-                "Verify the timestamp before making decisions."
+                "All returned records are within the 24-hour freshness "
+                "threshold. Verify timestamps before making decisions."
+            )
+        elif feed_status == "STALE":
+            status = "⚠️ STALE"
+            recommendation = (
+                "All returned records are stale. Do not treat these "
+                "prices as live. Wait for refreshed market data."
+            )
+        else:
+            status = "⚠️ PARTIALLY STALE"
+            recommendation = (
+                "Some stock records are stale. Do not treat the entire "
+                "feed as live. Verify each stock's timestamp."
             )
 
         message = (

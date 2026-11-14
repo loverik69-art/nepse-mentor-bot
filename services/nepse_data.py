@@ -172,7 +172,7 @@ def normalize_stock(row):
         **validated,
         "last_updated": timestamp.isoformat(),
         "age_minutes": age_minutes,
-        "is_stale": age_minutes > 24 * 60,
+        "is_stale": (now - timestamp) > timedelta(hours=24),
         "source": "YONEPSE community data feed",
     }
 

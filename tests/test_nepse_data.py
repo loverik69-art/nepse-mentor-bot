@@ -612,3 +612,51 @@ def test_fetch_market_data_saves_only_fresh_stocks(monkeypatch):
     assert stocks[1]["is_stale"] is False
     assert len(saved) == 1
     assert saved[0]["symbol"] == "NABIL"
+
+
+def test_timestamp_just_over_24_hours_is_stale():
+    stock = SAMPLE.copy()
+    stock["last_updated"] = (
+        datetime.now(nepse_data.NEPAL_TZ)
+        - timedelta(hours=24, seconds=1)
+    ).isoformat()
+
+    assert normalize_stock(stock)["is_stale"] is True
+
+
+def test_timestamp_just_under_24_hours_is_fresh():
+    stock = SAMPLE.copy()
+    stock["last_updated"] = (
+        datetime.now(nepse_data.NEPAL_TZ)
+        - timedelta(hours=24, seconds=-1)
+    ).isoformat()
+
+    assert normalize_stock(stock)["is_stale"] is False
+
+
+def test_fetch_market_data_recovers_after_network_outage(monkeypatch):
+    attempts = {"count": 0}
+    response = FakeResponse(payload=[SAMPLE.copy()])
+
+    def fake_client(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return FakeClient(
+                error=httpx.ConnectError("Temporary outage")
+            )
+        return FakeClient(response=response)
+
+    monkeypatch.setattr(
+        nepse_data.httpx,
+        "AsyncClient",
+        fake_client,
+    )
+
+    with pytest.raises(MarketDataError):
+        asyncio.run(nepse_data.fetch_market_data())
+
+    stocks = asyncio.run(nepse_data.fetch_market_data())
+
+    assert attempts["count"] == 2
+    assert len(stocks) == 1
+    assert stocks[0]["symbol"] == "NABIL"

@@ -96,4 +96,22 @@ def test_data_status_reports_fresh_and_stale_counts(monkeypatch):
     assert "Fresh stock records: 1" in response
     assert "Stale stock records: 1" in response
     assert "Stale data percentage: 50.0%" in response
+    assert "Status: ⚠️ PARTIALLY STALE" in response
+    assert "Do not treat the entire feed as live" in response
+
+
+def test_data_status_reports_empty_feed(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "fetch_market_data",
+        AsyncMock(return_value=[]),
+    )
+
+    update = make_update()
+    asyncio.run(handlers.data_status_command(update, None))
+
+    response = update.message.reply_text.await_args.args[0]
+
+    assert "No stock records returned" in response
+    assert "Educational analysis only" in response
 

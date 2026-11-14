@@ -119,6 +119,7 @@ def test_health_reports_fresh_and_stale_counts(monkeypatch):
     assert "Fresh stock records: 1" in response
     assert "Stale stock records: 1" in response
     assert "Stale data percentage: 50.0%" in response
+    assert "NEPSE feed: Reachable, but partially stale" in response
 
 
 
