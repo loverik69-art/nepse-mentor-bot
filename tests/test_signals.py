@@ -244,3 +244,97 @@ def test_get_stock_signal_rejects_unknown_symbol(monkeypatch):
 
     with pytest.raises(ValueError, match="Stock not found"):
         asyncio.run(get_stock_signal("UNKNOWN"))
+
+
+def test_full_bullish_agreement_has_high_confidence():
+    result = generate_signal(make_analysis())
+
+    assert result["confidence"] == 100.0
+    assert result["quality"] == "High"
+    assert result["data_coverage"] == 100.0
+    assert result["available_factors"] == 3
+    assert result["supporting_factors"] == 3
+
+
+def test_two_bullish_factors_with_one_missing():
+    result = generate_signal(
+        make_analysis(macd_value=None, macd_signal=None)
+    )
+
+    assert result["signal"] == "BUY"
+    assert result["confidence"] == 100.0
+    assert result["quality"] == "Moderate"
+    assert result["data_coverage"] == 66.7
+    assert result["available_factors"] == 2
+    assert result["supporting_factors"] == 2
+
+
+def test_two_bullish_factors_with_one_neutral():
+    result = generate_signal(make_analysis(rsi_14=70))
+
+    assert result["signal"] == "BUY"
+    assert result["confidence"] == 66.7
+    assert result["quality"] == "Moderate"
+    assert result["data_coverage"] == 100.0
+    assert result["available_factors"] == 3
+    assert result["supporting_factors"] == 2
+
+
+def test_hold_has_no_directional_confidence():
+    analysis = make_analysis(
+        sma_20=110,
+        sma_50=100,
+        ema_20=90,
+        ema_50=100,
+        rsi_14=40,
+        macd_value=2,
+        macd_signal=1,
+    )
+    result = generate_signal(analysis)
+
+    assert result["signal"] == "HOLD"
+    assert result["confidence"] is None
+    assert result["quality"] == "Neutral / mixed"
+    assert result["data_coverage"] == 100.0
+
+
+@pytest.mark.parametrize(
+    "is_stale,observations,expected_signal",
+    [
+        (True, 60, "STALE_DATA"),
+        (False, 10, "INSUFFICIENT_DATA"),
+    ],
+)
+def test_unavailable_signal_has_no_confidence_or_coverage(
+    is_stale, observations, expected_signal
+):
+    result = generate_signal(
+        make_analysis(observations=observations),
+        is_stale=is_stale,
+    )
+
+    assert result["signal"] == expected_signal
+    assert result["confidence"] is None
+    assert result["quality"] == "Unavailable"
+    assert result["data_coverage"] == 0.0
+    assert result["available_factors"] == 0
+    assert result["supporting_factors"] == 0
+
+
+def test_full_bearish_agreement_has_high_confidence():
+    analysis = make_analysis(
+        sma_20=90,
+        sma_50=100,
+        ema_20=90,
+        ema_50=100,
+        rsi_14=40,
+        macd_value=-2,
+        macd_signal=-1,
+    )
+    result = generate_signal(analysis)
+
+    assert result["signal"] == "SELL"
+    assert result["confidence"] == 100.0
+    assert result["quality"] == "High"
+    assert result["data_coverage"] == 100.0
+    assert result["supporting_factors"] == 3

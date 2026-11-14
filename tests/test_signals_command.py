@@ -16,6 +16,11 @@ def sample_signal(signal="BUY"):
         "signal": signal,
         "score": 3 if signal == "BUY" else 0,
         "strength": "Strong" if signal == "BUY" else "Unavailable",
+        "confidence": 100.0 if signal == "BUY" else None,
+        "quality": "High" if signal == "BUY" else "Unavailable",
+        "data_coverage": 100.0 if signal == "BUY" else 0.0,
+        "available_factors": 3 if signal == "BUY" else 0,
+        "supporting_factors": 3 if signal == "BUY" else 0,
         "ltp": 550.0,
         "last_updated": "2026-11-13T14:59:00+05:45",
         "age_minutes": 5,
@@ -42,6 +47,9 @@ def test_signal_command_displays_buy_signal(monkeypatch):
     assert "BUY" in response
     assert "Score: +3/3" in response
     assert "Strength: Strong" in response
+    assert "Confidence: 100.0%" in response
+    assert "Signal quality: High" in response
+    assert "Data coverage: 100.0% (3/3 factors)" in response
     assert "NPR 550.00" in response
     assert "Daily observations: 60" in response
     assert "Bullish:" in response

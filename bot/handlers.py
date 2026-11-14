@@ -2265,6 +2265,20 @@ async def signal_command(
         f"Signal: {heading}",
         f"Score: {score_text}",
         f"Strength: {result['strength']}",
+        (
+            f"Confidence: {result['confidence']:.1f}%"
+            if result.get("confidence") is not None
+            else (
+                "Confidence: Unavailable"
+                if signal in ("STALE_DATA", "INSUFFICIENT_DATA")
+                else "Confidence: N/A"
+            )
+        ),
+        f"Signal quality: {result.get('quality', 'Unavailable')}",
+        (
+            f"Data coverage: {result.get('data_coverage', 0.0):.1f}% "
+            f"({result.get('available_factors', 0)}/3 factors)"
+        ),
         f"LTP snapshot: NPR {result['ltp']:.2f}",
         f"Data age: {result['age_minutes']:.0f} minutes",
         f"Last updated: {result['last_updated']}",

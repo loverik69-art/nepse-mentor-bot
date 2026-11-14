@@ -75,6 +75,11 @@ def generate_signal(
             "signal": "STALE_DATA",
             "score": 0,
             "strength": "Unavailable",
+            "confidence": None,
+            "quality": "Unavailable",
+            "data_coverage": 0.0,
+            "available_factors": 0,
+            "supporting_factors": 0,
             "reasons": [
                 "Latest market data is stale; no actionable signal generated."
             ],
@@ -86,6 +91,11 @@ def generate_signal(
             "signal": "INSUFFICIENT_DATA",
             "score": 0,
             "strength": "Unavailable",
+            "confidence": None,
+            "quality": "Unavailable",
+            "data_coverage": 0.0,
+            "available_factors": 0,
+            "supporting_factors": 0,
             "reasons": [
                 "At least 50 daily observations are required."
             ],
@@ -93,6 +103,7 @@ def generate_signal(
 
     score = 0
     available_factors = 0
+    factor_directions = []
     reasons = []
 
     def add_factor(name, direction):
@@ -103,6 +114,7 @@ def generate_signal(
             return
 
         available_factors += 1
+        factor_directions.append(direction)
 
         if direction > 0:
             score += 1
@@ -178,11 +190,41 @@ def generate_signal(
     else:
         strength = "Weak or mixed"
 
+    supporting_factors = (
+        sum(1 for direction in factor_directions if direction > 0)
+        if signal == "BUY"
+        else sum(1 for direction in factor_directions if direction < 0)
+        if signal == "SELL"
+        else 0
+    )
+
+    confidence = (
+        round(supporting_factors / available_factors * 100, 1)
+        if signal in ("BUY", "SELL") and available_factors
+        else None
+    )
+
+    data_coverage = round(available_factors / 3 * 100, 1)
+
+    if signal == "HOLD":
+        quality = "Neutral / mixed"
+    elif available_factors == 3 and supporting_factors == 3:
+        quality = "High"
+    elif available_factors >= 2 and confidence >= 66.7:
+        quality = "Moderate"
+    else:
+        quality = "Low"
+
     return {
         "symbol": symbol.strip().upper(),
         "signal": signal,
         "score": score,
         "strength": strength,
+        "confidence": confidence,
+        "quality": quality,
+        "data_coverage": data_coverage,
+        "available_factors": available_factors,
+        "supporting_factors": supporting_factors,
         "reasons": reasons,
     }
 
